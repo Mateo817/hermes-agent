@@ -1,19 +1,19 @@
 # Deterministischer GitHub-PR-Review-Dispatcher: Architekturvertrag
 
 Status: additive Architektur- und Adapterklarstellung, Schema 1; Implementierung bis gebundenem unabhängigen Release-Review-`PASS` verboten
-Vertragsversion: `github-pr-review-dispatcher/v1.1.1`
-Architektur-Task: `t_78d82a35` (Klarstellung von `t_8a99f79d`, Remediation von `t_48b63e1b`)
+Vertragsversion: `github-pr-review-dispatcher/v1.1.3`
+Architektur-Task: `t_78ccb866` (selbstkonsistente Scope-3-Release-Identität für die semantisch akzeptierte CI-Provenance-Korrektur `t_2c09a856`; Klarstellung von `t_78d82a35`, Remediation von `t_48b63e1b`)
 Inventar-Task: `t_58d44561`
 Inventarisierte Upstream-Revision: `682a95258ce9e877cfb607a5ada6436183efdebb`
 Inventar: `github-kanban-scheduler-inventory-2026-09-16.md`, 19149 Bytes, SHA-256 `bc29b43dc5c556698b3f3ecb0c0442a45c794cc847695039b6d04f0a90676d2f`
 Kanonisches Upstream-/Basis-Repository: GitHub `NousResearch/hermes-agent`; frische Klarstellungsbasis nach direktem Remote-/Base-Ref-Read am 2026-09-16: `784d5c3f9c2cb77698d8a9d2e72b1d106a38ea88`
-Dauerhaftes Publikations-Repository: GitHub `Mateo817/hermes-agent`, von GitHub als Fork von `NousResearch/hermes-agent` ausgewiesen; autoritativer Nicht-Default-Ref wird als `refs/heads/contracts/github-pr-review-dispatcher-v1.1.1-base-784d5c3` publiziert.
+Dauerhaftes Publikations-Repository: GitHub `Mateo817/hermes-agent`, von GitHub als Fork von `NousResearch/hermes-agent` ausgewiesen; autoritativer Nicht-Default-Ref wird als `refs/heads/contracts/github-pr-review-dispatcher-v1.1.3-scope3-from-2e6999f` publiziert. Der unveränderliche v1.1.1-Vorgänger ist Commit `2e6999f945836b4fe43e5127d3068222e297c6eb` auf `refs/heads/contracts/github-pr-review-dispatcher-v1.1.1-base-784d5c3` und darf weder verschoben noch überschrieben werden.
 Verworfene Evidenzbindung (keine Autoritaet): Commit `bf2c55cdd8777d0c3e45095ea3a76e939d33fc5e`, Ref `refs/heads/contracts/github-pr-review-dispatcher-v1.0.0`, Blob-SHA-256 `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`, verbotener Parent `aad0cbd55e9fef41cad79f7ca6f75b0e14a74ff6`
 Byte-identischer Transfer auf sauberer Basis: Commit `ca1ebca7097461383301f5b66b90795c3ad3bde4`, SHA-256 erneut `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`
 
-### 1.1.1-Klarstellung und Kompatibilitätsgrenze
+### 1.1.3-Klarstellung und Kompatibilitätsgrenze
 
-Version 1.1.1 ändert weder die acht Review-Key-Felder noch deren Reihenfolge, Marker oder `schema_version: 1`. Sie ersetzt ausschließlich widersprüchliche Adapter- und Lifecycle-Aussagen aus 1.1.0. Bei einem Widerspruch ist diese Klarstellung normativ:
+Version 1.1.3 ändert weder die acht Review-Key-Felder noch deren Reihenfolge, Marker oder `schema_version: 1`. Sie übernimmt die semantisch akzeptierten 1.1.2-Kontrollen unverändert; gegenüber 1.1.2 ändern sich ausschließlich Version und unveränderliche Release-Identität. Sie übernimmt alle Klarstellungen aus 1.1.1 und schließt die dort offene Producer-Provenance für Required CI sowie die Installations-Evidenzformulierung. Bei einem Widerspruch ist diese Klarstellung normativ:
 
 1. Maschinenlesbarer Request Schema 1 ist ausschließlich genau eine Markerzeile, unmittelbar gefolgt von genau einem `json`-Codeblock. Der flache Feldblock aus Workflow-Skill v5 ist Human-/Legacy-Dokumentation, kein zweites Wire-Format und wird nicht auto-akzeptiert. Eine künftige inkompatible Syntax benötigt `schema_version: 2`, explizite Parallel-Lesephase und neues Security-Review; es gibt keinen heuristischen Adapter.
 2. Öffentliche Gate-Ergebnisse sind ausschließlich `APPROVED|CHANGES_REQUIRED|BLOCKED|FAILED`. Die interne Engine darf `PASS` und Checkzustand `NOT_RUN` führen. Erst der Result-Adapter mappt internes `PASS` nach vollständiger Read-E-Revalidation und allen Gates zu öffentlichem `APPROVED`. `NOT_RUN` wird nie als öffentliches positives Gate publiziert.
@@ -24,6 +24,9 @@ Version 1.1.1 ändert weder die acht Review-Key-Felder noch deren Reihenfolge, M
 7. Der aktuelle Base-Tip stammt aus einem frischen expliziten Read des von GitHub gemeldeten Base-Refs. Historisches PR-`.base.sha` und Merge-Base sind keine Base-Tip-Quelle.
 8. Der Poller löst ausschließlich Repository → Projekt → Board → konfigurierte Orchestrierung auf. Er wählt keine globale Orchestrator-, Reviewer-, Worker-, Provider- oder Modellidentität und nutzt keinen Default.
 9. Ein Request gilt erst nach bestätigter nativer Task-Erzeugung und Feld-Readback als erfolgreich verarbeitet. Crash/Retry vor diesem Punkt reconciled denselben Zyklus anhand des exakten Review-Keys; er erzeugt keinen zweiten Zyklus oder Task.
+10. Required CI kann nur aus einer vollständig lesbaren, für den aktuellen Base-Ref anwendbaren GitHub-Policy positiv bewertet werden. Jede erforderliche Prüfung muss das exakte Tupel `(context_name, producer_kind=github_app, producer_app_id)` mit positiver numerischer App-ID liefern; Name oder Status-Context allein ist nie Producer-Identität.
+11. CI-Evidenz stammt ausschließlich aus vollständig paginierten Check-Suite-/Check-Run-Reads für den exakten Candidate-Head. Exakter Name, `check_run.app.id`, Suite-ID und frisch gelesener `check_suite.head_sha` müssen übereinstimmen; Commit Statuses werden in dieser Version nicht als Required-CI-Nachweis akzeptiert.
+12. Kanonische Policy- und Observation-Digests sowie sämtliche Quell-/Producer-/Suite-/Run-Identitäten werden persistiert und in Read D und Read E erneut gelesen. Jede Digest- oder Identitätsabweichung setzt den Lifecycle `STALE`; unlesbare/unsupported Policy ist `BLOCKED`, nachweislich untrusted oder negativ abgeschlossene Evidenz ist `FAILED`.
 
 ## 1. Zweck, Geltung und harte Grenzen
 
@@ -42,7 +45,7 @@ Feststehende Grenzen:
 - Es gibt keinen Namensheuristik-, aktuellen-Board-, `default`-, `hermes-system`-, letzten-Board- oder globalen Orchestrator-Fallback.
 - Der Poller wählt und setzt keine Reviewer-, Review-/Remediation-Worker-, Provider- oder Modellidentität. Die einzige Task-Identität, die er überträgt, ist das unverändert aus der kanonischen Binding-Zeile gelesene `orchestration_profile` als Intake-Routingziel; dafür existiert kein Default. Er merged nicht und schreibt nie auf eine Default-/Base-Branch.
 - Öffentlicher Gate-Zustand und technischer Lifecycle sind getrennt. `STALE` ist ausschließlich Lifecycle und niemals ein Gate-Ergebnis. Kanban `done` ist niemals gleichbedeutend mit internem `PASS` oder öffentlichem `APPROVED`.
-- Pflicht-CI in `PENDING`, `QUEUED`, `IN_PROGRESS`, fehlend, übersprungen, abgebrochen oder unbekannt ist nicht `PASS`.
+- Pflicht-CI in `PENDING`, `QUEUED`, `IN_PROGRESS`, fehlend, übersprungen, neutral, abgebrochen, stale, action-required, timed-out, fehlproduziert oder unbekannt ist nicht `PASS`.
 - Der Poller ruft kein LLM auf. Das gilt auch für Parsing, Routing, Retry, Dry-Run und Remediation-Eignung.
 - Dieser Vertrag aktiviert keinen Dienst, erstellt kein Label, verändert keine GitHub-Ressource und implementiert keine Produktfunktion.
 
@@ -93,13 +96,14 @@ Der Port stellt mindestens folgende typed Operationen bereit:
 - `list_candidates(repository, label) -> list[PullRequestRef]`
 - `read_pull_request(repository, number) -> PullRequestSnapshot`
 - `list_issue_comments(repository, number) -> list[IssueComment]`
-- `read_required_checks(repository, head_sha) -> RequiredCheckSnapshot`
+- `read_required_check_policy(repository, base_ref, base_tip) -> RequiredCheckPolicySnapshot`
+- `read_check_suites(repository, head_sha) -> list[CheckSuiteSnapshot]`, `read_check_suite(repository, suite_id) -> CheckSuiteSnapshot` und `read_check_runs(repository, suite_id, filter="all") -> list[CheckRunSnapshot]`; Listenoperationen müssen vollständig paginieren
 - `remove_label(repository, number, label)` und `add_label(...)`
 - `update_comment(repository, comment_id, body, expected_body_hash=None)`
 - `create_result_comment(...) -> CommentIdentity` nur wenn noch kein persistierter Result-Kommentar existiert
 - `read_branch_protection(...)` und `compare_branch_head(...)` für Remediation
 
-Die Implementierung SOLL vorhandenes authentifiziertes `gh api` als Subprozessgrenze verwenden, weil `gh` inventarisiert ist und keine neue Python-Abhängigkeit nötig ist. Alle Aufrufe verwenden Argumentlisten ohne Shell, feste Endpunkte und JSON-Parsing; Token, Header, vollständige Prozessumgebung und rohe Fehlkörper werden nicht geloggt. HTTP-ETag/`updated_at` kann zur Optimierung dienen, ersetzt aber nie die normative Revalidation.
+Die Implementierung SOLL vorhandenes authentifiziertes `gh api` als Subprozessgrenze verwenden, weil `gh` inventarisiert ist und keine neue Python-Abhängigkeit nötig ist. Alle Aufrufe verwenden Argumentlisten ohne Shell, feste `GET`-Endpunkte, `Accept: application/vnd.github+json`, explizite unterstützte `X-GitHub-Api-Version`, vollständige Pagination über `Link`/`gh api --paginate` und striktes JSON-Parsing; Token, Header, vollständige Prozessumgebung und rohe Fehlkörper werden nicht geloggt. Response-Status, GitHub Request-ID, Retrieval-Zeit und ETag (wenn vorhanden) werden als Evidenz geführt. Ein ETag darf zur Optimierung dienen, ersetzt aber nie den normativen frischen Read.
 
 ## 4. Kanonische Bindung und Konfiguration
 
@@ -240,6 +244,32 @@ Der maschinenlesbare Result-Kommentar beginnt mit `<!-- hermes-review-result -->
   "gate": "APPROVED|CHANGES_REQUIRED|BLOCKED|FAILED",
   "lifecycle": "COMPLETED|STALE|BLOCKED",
   "required_ci": "PASS|FAIL|PENDING|MISSING",
+  "ci_policy": {
+    "base_ref": "main",
+    "base_tip": "<40 lowercase hex>",
+    "digest": "<64 lowercase hex>",
+    "retrieved_at": "<RFC3339 UTC>",
+    "sources": [{"kind": "ruleset", "id": "14161644", "api_url": "<canonical API identity>", "retrieved_at": "<RFC3339 UTC>", "etag": "<optional>"}]
+  },
+  "ci_observations": [{
+    "context": "All required checks pass",
+    "expected_app_id": 15368,
+    "check_run_id": 1,
+    "check_suite_id": 2,
+    "observed_app_id": 15368,
+    "observed_name": "All required checks pass",
+    "observed_run_head_sha": "<40 lowercase hex>",
+    "observed_suite_head_sha": "<40 lowercase hex>",
+    "status": "completed",
+    "conclusion": "success",
+    "completed_at": "<RFC3339 UTC>",
+    "details_url": "https://github.com/...",
+    "run_retrieved_at": "<RFC3339 UTC>",
+    "run_etag": "<optional>",
+    "suite_retrieved_at": "<RFC3339 UTC>",
+    "suite_etag": "<optional>",
+    "digest": "<64 lowercase hex>"
+  }],
   "task_id": "t_<id>",
   "review_run_ids": [1],
   "finding_ids": ["F-001"],
@@ -247,7 +277,7 @@ Der maschinenlesbare Result-Kommentar beginnt mit `<!-- hermes-review-result -->
 }
 ```
 
-`STALE`, internes `PASS` und Checkzustand `NOT_RUN` sind im öffentlichen Feld `gate` nicht zulässig. Resultate sind eine Projektion aus persistiertem Kanban-/Reviewzustand und GitHub-Revalidation, keine Eingabe, die einen Gate-Zustand autorisiert. Nur der Result-Adapter mappt internes `PASS` nach erfolgreicher letzter Read-E-Revalidation zu `APPROVED`; interne terminale technische/CI-Fehler werden `FAILED`, externe Fähigkeit oder Ambiguität wird `BLOCKED`, Findings werden `CHANGES_REQUIRED`. Der Writer speichert die von GitHub zurückgegebene `result_comment_id`, Actor-ID und Body-Hash. Ein später gelesener Result-Kommentar ist nur konsistent, wenn ID, Key und Hash mit der Persistenz übereinstimmen. Ein fremder/duplizierter Marker blockiert die Veröffentlichung; er kann niemals `APPROVED` erzeugen. Bei ungewissem Write-Ausgang wird zuerst per ID beziehungsweise exakt persistiertem Key/Actor/Hash reconciled und nicht blind erneut erstellt.
+`STALE`, internes `PASS` und Checkzustand `NOT_RUN` sind im öffentlichen Feld `gate` nicht zulässig. Die additiven CI-Objekte sind für v1.1.3 bei jedem terminalen Resultat verpflichtend und enthalten die vollständigen persistierten Quellen/Beobachtungen; kein Kommentarwert ist CI-Autorität. Resultate sind eine Projektion aus persistiertem Kanban-/Reviewzustand und GitHub-Revalidation, keine Eingabe, die einen Gate-Zustand autorisiert. Nur der Result-Adapter mappt internes `PASS` nach erfolgreicher letzter Read-E-Revalidation einschließlich identischer Policy-/Observation-Digests zu `APPROVED`; interne terminale technische/CI-Fehler werden `FAILED`, externe Fähigkeit, Unsupported Policy oder unlesbare/mehrdeutige Autorität wird `BLOCKED`, Findings werden `CHANGES_REQUIRED`. Der Writer speichert die von GitHub zurückgegebene `result_comment_id`, Actor-ID und Body-Hash. Ein später gelesener Result-Kommentar ist nur konsistent, wenn ID, Key und Hash mit der Persistenz übereinstimmen. Ein fremder/duplizierter Marker blockiert die Veröffentlichung; er kann niemals `APPROVED` erzeugen. Bei ungewissem Write-Ausgang wird zuerst per ID beziehungsweise exakt persistiertem Key/Actor/Hash reconciled und nicht blind erneut erstellt.
 
 ## 6. Review-Key Schema 1
 
@@ -352,6 +382,43 @@ CREATE TABLE IF NOT EXISTS pr_review_attempts (
     detail_json        TEXT
 );
 
+CREATE TABLE IF NOT EXISTS pr_review_ci_policy_snapshots (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_key          TEXT NOT NULL REFERENCES pr_review_cycles(review_key),
+    boundary            TEXT NOT NULL CHECK (boundary IN ('EVALUATION','READ_D','READ_E')),
+    base_ref            TEXT NOT NULL,
+    base_tip            TEXT NOT NULL,
+    retrieved_at        TEXT NOT NULL,
+    etag                 TEXT,
+    policy_digest       TEXT NOT NULL,
+    canonical_json      TEXT NOT NULL,
+    evidence_json       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pr_review_ci_observations (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_snapshot_id  INTEGER NOT NULL REFERENCES pr_review_ci_policy_snapshots(id),
+    context_name        TEXT NOT NULL,
+    producer_kind       TEXT NOT NULL CHECK (producer_kind = 'github_app'),
+    expected_app_id     INTEGER NOT NULL CHECK (expected_app_id > 0),
+    check_run_id        INTEGER,
+    check_suite_id      INTEGER,
+    observed_app_id     INTEGER,
+    observed_name       TEXT,
+    observed_run_head_sha   TEXT,
+    observed_suite_head_sha TEXT,
+    status              TEXT,
+    conclusion          TEXT,
+    completed_at        TEXT,
+    details_url         TEXT,
+    run_retrieved_at    TEXT NOT NULL,
+    run_etag             TEXT,
+    suite_retrieved_at  TEXT,
+    suite_etag           TEXT,
+    observation_digest  TEXT NOT NULL,
+    canonical_json      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS pr_review_events (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     review_key     TEXT,
@@ -403,6 +470,7 @@ Das bestehende `tasks`-Schema besitzt keinen Task-Typ. Daher wird ein regulärer
 - `project_id`, expliziter `board_slug`, `binding_revision`, `binding_fingerprint` und die vier kanonischen Authority-Felder
 - Handoff: Summary, Changed Files, Testbefehle, bekannte Risiken
 - Pflichtaktionen: GitHub frisch lesen; vor Review und vor Gate revalidieren; CI prüfen; kein Merge
+- CI-Policy-Quellen mit Kind/ID/API-Identität, Base-Ref/Tip, Retrieval-Zeit/ETag, kanonischem Digest und allen `(context_name, github_app, producer_app_id)`-Tupeln; pro Tupel vollständige Check-Run-/Suite-Evidenz und Observation-Digest
 - Audit-IDs und erlaubte Gate-/Lifecycle-Werte
 
 Der Task erhält `project_id`, den vorhandenen projektgebundenen `workspace_kind=worktree`-Pfad, `idempotency_key="pull_request_review:" + review_key` und exakt den gebundenen `orchestration_profile` als Orchestrierungs-Assignee. Dieses Feld ist ein konfiguriertes Routingziel, keine Pollerentscheidung über Reviewer oder ausführenden Remediation-Worker. `skills`, `model_override`, `provider_override`, `reasoning_effort` und Reviewer bleiben NULL/leer. Die gebundene Orchestrierung muss den Intake über ihren bestehenden, separat verantworteten Ablauf weiter routen. Falls dieses Profil nicht installiert oder nicht als Orchestrierungsweg verwendbar ist, ist die Binding-/Orchestrierungsfähigkeit `BINDING_INVALID` und kein Task wird erzeugt.
@@ -453,7 +521,7 @@ Für jeden Kandidaten:
 11. Nach erfolgreichem Read C wird die Binding-Revalidation erneut ausgeführt. Eine Board-Transaktion materialisiert per review-spezifischem CAS und unique Idempotency-Key genau einen regulären nativen Task, liest ihn vollständig zurück und markiert erst dann den Cycle `MATERIALIZED/IN_REVIEW`. Der vorhandene native Kanban-Lifecycle entscheidet dessen normale Readiness und alle Folgeschritte.
 12. Scheitert Read C oder der zweite Binding-/CAS-Check permanent, setzt eine Board-Transaktion den Cycle `STALE`; es existiert kein Task. Bei transient/ungewissem Read-C-Ausgang bleibt `PENDING_READ_C` unverändert und wird read-before-retry reconciled. Kein Fehlerpfad darf einen Task, Claim oder Worker erzeugen.
 
-Vor Beginn eines menschlichen/agentischen Reviews MUSS der Review-Worker über eine schmale `revalidate_for_review(review_key)`-Operation Read D durchführen. Vor jedem Gate-/Result-Write MUSS `revalidate_for_gate(review_key)` Read E durchführen. Beide vergleichen aktuelle Base-/Head-/Request-/Bindingwerte und Key. Jede Abweichung setzt Lifecycle `STALE`, lässt `engine_gate` unverändert (`NOT_RUN`, `CHANGES_REQUIRED`, `BLOCKED`, `FAILED` oder historisches `PASS`) und verbietet die Verwendung des alten Resultats für den aktuellen PR.
+Vor Beginn eines menschlichen/agentischen Reviews MUSS der Review-Worker über eine schmale `revalidate_for_review(review_key)`-Operation Read D durchführen. Vor jedem Gate-/Result-Write MUSS `revalidate_for_gate(review_key)` Read E durchführen. Beide lesen zusätzlich die vollständige Required-CI-Policy und alle Check-Suite-/Check-Run-Beobachtungen nach Abschnitt 12 neu und vergleichen aktuelle Base-/Head-/Request-/Bindingwerte, Key, Quellidentitäten und beide Digestarten. Jede Abweichung, auch Producer-Rotation, Ruleset-/Branch-Protection-Änderung, hinzugefügter/entfernter Check, Run-/Suite-Austausch oder Beobachtungsänderung, setzt Lifecycle `STALE`, lässt `engine_gate` unverändert (`NOT_RUN`, `CHANGES_REQUIRED`, `BLOCKED`, `FAILED` oder historisches `PASS`) und verbietet die Verwendung des alten Resultats für den aktuellen PR. Ein unveränderter Digest aus einem Cache ist kein Read D/E.
 
 ## 11. Lifecycle-, Label- und Gate-State-Machines
 
@@ -500,11 +568,46 @@ Interne geschlossene Menge `engine_gate`: `NOT_RUN`, `PASS`, `CHANGES_REQUIRED`,
 
 ## 12. CI-Gate
 
-Die Liste der Required Checks wird von GitHubs Branch-Protection/Ruleset-Auskunft für den aktuellen Base-Ref gelesen, nicht aus dem Kommentar. Wenn diese Auskunft wegen Berechtigungen nicht vollständig möglich ist, ist das Gate `BLOCKED`.
+### 12.1 Unterstützte Policy-Quelle und Discovery
 
-`required_ci=PASS` gilt nur, wenn jede aktuell erforderliche Check-Run-/Status-Context-Instanz für den exakten `head_sha` terminal erfolgreich ist. Neutrale/skipped Checks zählen nur dann als erfolgreich, wenn GitHub sie für die konkrete Protection ausdrücklich nicht als erforderlich behandelt. Duplicate Namen, fehlende Suite, pending/queued/in-progress, stale head, failure, cancelled, timed_out, action_required oder unbekannte Conclusion ergeben `PENDING`, `FAIL`, `MISSING` oder `BLOCKED`, nie `PASS`.
+Policy ist ausschließlich Repository-/Base-Ref-Daten von GitHub. Sie darf niemals aus Checknamen, Commit Statuses, PR-Kommentaren, Workflow-Ausgabe, Development-Agent-Eingabe, Projektähnlichkeit, historischer Evidenz oder einem Default abgeleitet werden.
 
-Read E vor Gate liest Required Checks erneut. Ein Check- oder Ruleset-Wechsel zwischen Bewertung und Result-Write blockiert den Write und startet die Bewertung neu.
+Für jeden Snapshot wird zuerst der aktuelle Base-Tip separat gelesen. Danach müssen mindestens folgende `GET`s mit expliziter API-Version und vollständiger Pagination ausgeführt werden:
+
+1. `GET /repos/{owner}/{repo}/rules/branches/{base_ref}?per_page=100` liefert alle aktiven anwendbaren Repository-/Organization-Ruleset-Regeln einschließlich `ruleset_source_type`, `ruleset_source`, `ruleset_id` und `required_status_checks[].{context,integration_id}`. Der exakte Ref wird als ein URL-Pathsegment percent-encoded, niemals normalisiert. Nur `type=required_status_checks` mit jedem `integration_id` als positivem Integer wird unterstützt. `type=workflows` ist in v1.1.3 unsupported, weil dessen REST-Identität keinen erforderlichen Check-Producer-Tupel garantiert, und ergibt `BLOCKED`.
+2. `GET /repos/{owner}/{repo}/branches/{base_ref}/protection` beziehungsweise der darin bezeichnete Required-Status-Checks-Read liefert klassische Branch-Protection-Policy. Aus `required_status_checks.checks[].{context,app_id}` werden Tupel nur bei positivem Integer-`app_id` gebildet. `contexts` ohne deckungsgleiches producergebundenes `checks`-Element, `app_id=null`, `app_id=-1` oder fehlende Status-Check-Policy sind nicht positiv auswertbar.
+
+Ein `404` auf Branch Protection darf nur als „keine klassische Policy“ behandelt werden, wenn der verwendete Actor separat mit Repository-Administration-Read/Admin-Fähigkeit autoritativ nachgewiesen ist; andernfalls ist `404` wegen der Ununterscheidbarkeit von „nicht vorhanden“ und „nicht sichtbar“ `BLOCKED`. `401`, `403`, unvollständige Pagination, unbekannte Regeltypen mit CI-Wirkung, malformed JSON oder fehlende Quellfelder sind stets `CI_POLICY_UNREADABLE/BLOCKED`. Operatoraktion: dem dedizierten GitHub-App-/Fine-grained-Token mindestens lesenden Zugriff auf Repository Administration/Rulesets sowie Checks/Contents/Metadata geben, Organization-/Enterprise-Rulesets für den Actor sichtbar machen und den vollständigen Policy-Read erneut ausführen; niemals einen Namen oder App-ID als Ersatz konfigurieren.
+
+Alle Quellen werden zu einer Menge von `(context_name, producer_kind="github_app", producer_app_id)` vereinigt. Identische Tupel aus mehreren Quellen dürfen dedupliziert werden, wobei jede Quelle erhalten bleibt. Derselbe `context_name` mit verschiedenen App-IDs, widersprüchliche überlappende Policies, legacy context-only requirements, leere Tupelmenge/keine Required Checks oder irgendeine unsupported Required-Workflow-Identität ergeben `CI_POLICY_UNSUPPORTED/BLOCKED`, nie `PASS`. Die unterstützte Teilmenge ist damit bewusst nur producergebundene Branch-Protection-`checks.app_id` und Ruleset-`required_status_checks.integration_id`.
+
+### 12.2 Kanonische Policy-Evidenz
+
+Der Policy-Snapshot enthält: kanonische Source-Kind-/ID-/API-Identität (bei Rulesets zusätzlich Source-Type/Source; bei Branch Protection die Protection-/Status-Checks-URL), exakten Base-Ref, frischen Base-Tip, Retrieval-Zeit, pro Response ETag wenn vorhanden und alle sortierten Tupel. Canonical JSON ist UTF-8 `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))` über ausschließlich JSON-Strings, Integer, Bool, Arrays und Objekte; Source-Liste sortiert nach `(kind,id,api_identity)`, Tupel nach `(context_name,producer_kind,producer_app_id)`. Volatile Retrieval-Zeiten, ETags, Request-IDs und Transportheader werden im Evidence JSON auditiert, aber aus dem Digest-Preimage ausgeschlossen, damit ein inhaltlich identischer frischer Read denselben Digest erzeugt. `policy_digest = sha256(b"ci-policy/v1\n" + canonical_json_bytes).hexdigest()`. Canonical JSON, vollständiges Evidence JSON und Digest werden gemeinsam als append-only Snapshot mit Boundary `EVALUATION|READ_D|READ_E` persistiert; ein Digest ohne Preimage oder ein überschriebenes früheres Snapshot ist ungültig.
+
+### 12.3 Check-Suite-/Check-Run-Beobachtung
+
+Für den exakten Candidate-`head_sha` werden `GET /repos/{owner}/{repo}/commits/{head_sha}/check-suites?per_page=100` vollständig paginiert und anschließend jede zurückgegebene Suite ohne Vorfilter auf App oder Namen per `GET /repos/{owner}/{repo}/check-suites/{check_suite_id}` frisch gelesen. Für jede Suite werden Runs über `GET /repos/{owner}/{repo}/check-suites/{check_suite_id}/check-runs?per_page=100&filter=all` vollständig paginiert; nur so bleiben same-name Runs eines falschen Producers sichtbar. Der direkte Commit-Check-Runs-Endpunkt darf ergänzend genutzt werden, ersetzt wegen seines dokumentierten 1000-Suite-Limits und Default-`filter=latest` aber nicht diese Suite-Enumeration. Commit Statuses sind in v1.1.3 nie erfüllende Evidenz.
+
+Für jedes Policy-Tupel muss genau ein Check Run existieren, der gleichzeitig erfüllt:
+
+- `check_run.name == context_name` (exakte UTF-8-Stringgleichheit),
+- `check_run.app.id == producer_app_id` als positiver Integer,
+- `check_run.check_suite.id == check_suite.id`,
+- frisch gelesenes `check_suite.head_sha == candidate head_sha` und zusätzlich `check_run.head_sha == candidate head_sha`,
+- `check_run.status == "completed"`, `check_run.conclusion == "success"` und nichtleeres valides `completed_at`.
+
+Es wird nicht „latest“ gewählt. Mehr als ein passender Run, derselbe Name von einer anderen App, geänderte/fehlende App-ID, fehlende/abweichende Suite-ID, fehlender Suite-Read, fehlender/falscher Head, malformed Provenance oder unbekannte Conclusion sind absichtlich nicht mehrdeutig auflösbar. Jeder gefundene gleichnamige Run wird als eigene append-only Beobachtung unter dem Boundary-Snapshot gespeichert, damit Spoof/Duplicate-Evidenz nicht verloren geht; ein fehlender Run erhält eine explizite MISSING-Beobachtung mit null Run-/Suite-Feldern. Pro Beobachtung werden Context, erwartete App-ID, Run-ID, Suite-ID, beobachtete App-ID/Name/Run-Head/Suite-Head/Status/Conclusion/`completed_at`/`details_url` sowie getrennte Run-/Suite-Retrieval-Zeiten und ETags persistiert. Canonical JSON verwendet dieselbe Serialisierung, schließt aber wie die Policy volatile Retrieval-/Transportmetadaten aus; `observation_digest = sha256(b"ci-observation/v1\n" + canonical_json_bytes).hexdigest()`.
+
+### 12.4 Zustandsabbildung und Revalidation
+
+- Exakt eine vollständige vertrauenswürdige Beobachtung mit `completed/success` für jedes Tupel und keine gleichnamige Spoof-/Duplikatbeobachtung ergibt `required_ci=PASS`.
+- `queued|in_progress|waiting|requested|pending` ergibt `required_ci=PENDING`; es wird kein terminal positives Gate geschrieben.
+- Kein Run für ein Tupel ergibt `required_ci=MISSING`; bei terminaler Resultbewertung mappt dies auf `engine_gate=FAILED`, nicht auf PASS.
+- `completed` mit `failure|cancelled|timed_out|action_required|stale|neutral|skipped`, same-name wrong producer, Producer-Wechsel, Duplicate/Ambiguität, fehlende App-/Suite-/Head-Provenance oder falscher Head ergibt `required_ci=FAIL` und terminal `engine_gate=FAILED`. „Untrusted“ ist damit konsistent ein nachweislich negativer CI-Ausgang.
+- Unlesbare/unvollständige Policy oder Beobachtung, fehlende API-Fähigkeit, unsupported Policyform oder nicht auflösbare Autoritätsambiguität ergibt `engine_gate=BLOCKED`; „unreadable/unsupported“ ist nie `FAILED`, weil kein verlässlicher negativer CI-Ausgang beobachtet wurde.
+
+Read D und Read E wiederholen Policy- und Observation-Discovery vollständig. Jede Änderung an Base-Tip, Source-Menge/-Identität, Policy-Tupeln/Digest, Producer-ID, Run-/Suite-ID oder Observation-Digest setzt den Zyklus `STALE`; der aktuelle Read kann erst in einem neuen bzw. explizit neu bewerteten aktuellen Zyklus Gate-Evidenz liefern. Drift zwischen Read D und Read E darf nicht als `BLOCKED` oder `FAILED` das historische Gate überschreiben.
 
 ## 13. Remediation: exakt zwölf kumulative Bedingungen
 
@@ -570,7 +673,8 @@ Geschlossene Fehlerfamilien:
 - `DB_BUSY`: bounded Retry; unbekannter Commit-Ausgang wird per Review-Key/Task-ID gelesen, nicht wiederholt.
 - `LOCK_UNAVAILABLE`: Tick schreibt nichts; Alarm/Audit.
 - `TASK_CREATE_FAILED`: Transaktion rollt Claim und Task zurück; retrybar nur nach Fehlerklassifikation.
-- `CI_PENDING|CI_FAILED|CI_UNREADABLE`: nie PASS; pending wird später erneut gelesen, unreadable blockiert.
+- `CI_PENDING|CI_MISSING|CI_FAILED`: nie PASS; pending/missing wird später erneut gelesen, nachweislich negativer/spoofed/ambiguous Producer oder terminaler Nicht-Erfolg ist FAILED.
+- `CI_POLICY_UNREADABLE|CI_POLICY_UNSUPPORTED|CI_OBSERVATION_UNREADABLE`: externe Fähigkeit, vollständige Pagination oder unterstützte Autorität fehlt; `BLOCKED` mit der konkreten Permission-/Policy-Migrationsaktion.
 - `GITHUB_WRITE_UNCERTAIN`: read/reconcile vor Retry.
 - `REMEDIATION_INELIGIBLE|CAS_LOST|UNTRUSTED_HEAD`: keine Branchmutation.
 - `REMEDIATION_CONFLICT`: Source-Key oder Spezifikation kollidiert; kein Update und keine zweite Task.
@@ -605,13 +709,13 @@ Dry-Run MUSS dieselben Reads, Parser, Key-Berechnung, Binding-Validierung, Reval
 - Cron-/Gateway-Konfiguration ändern,
 - Worker oder Modelle starten.
 
-Daher werden DBs read-only geöffnet und Migrationsbedarf als `MIGRATION_REQUIRED` berichtet. Reportfelder: Repository/PR, Comment-ID-Konflikte, die acht kanonischen Key-Felder (Refs unverändert), escaped Preimage plus Preimage-SHA, berechneter Key, Binding/Projekt/Board/Orchestrierung, vorhandener Cycle/Task, geplante Transition/Writes, CI-Zustand, alle zwölf Remediation-Bools, deprecated Aggregate nur als Diagnose, Skip-/Fehlerklasse und `writes_performed: 0`.
+Daher werden DBs read-only geöffnet und Migrationsbedarf als `MIGRATION_REQUIRED` berichtet. Reportfelder: Repository/PR, Comment-ID-Konflikte, die acht kanonischen Key-Felder (Refs unverändert), escaped Preimage plus Preimage-SHA, berechneter Key, Binding/Projekt/Board/Orchestrierung, vorhandener Cycle/Task, geplante Transition/Writes, CI-Zustand, vollständige Policy-Quellen/Tupel/Digest und Check-Run-/Suite-Beobachtungen/Digests, alle zwölf Remediation-Bools, deprecated Aggregate nur als Diagnose, Skip-/Fehlerklasse und `writes_performed: 0`.
 
 ### 16.2 Strukturierte Logs
 
 Events mindestens: `tick_start`, `tick_end`, `candidate`, `skip`, `binding`, `key_computed`, `comment_consistency`, `cycle_claim`, `task_created`, `label_reconcile`, `retry_scheduled`, `stale`, `pre_review_revalidate`, `pre_gate_revalidate`, `ci_gate`, `remediation_eligibility`, `remediation_cas`, `result_reconcile`, `error`.
 
-Pflichtfelder: `event`, `correlation_id`, `repository`, `pr_number`, `review_key` (wenn berechenbar), `task_id` (wenn vorhanden), `error_class`, `retryable`, `dry_run`, `duration_ms`. Keine Tokens, Authorization-Header, Cookie, vollständige Prozessumgebung, Kommentar-/Task-Body-Rohtexte, Secrets, private Clone-URLs oder unredigierte subprocess stderr. GitHub Request-ID darf gespeichert werden.
+Pflichtfelder: `event`, `correlation_id`, `repository`, `pr_number`, `review_key` (wenn berechenbar), `task_id` (wenn vorhanden), `error_class`, `retryable`, `dry_run`, `duration_ms`; CI-Events enthalten Source-Kind/ID/API-Identität, Base-Ref/Tip, Retrieval-Zeit/ETag, Policy-Digest, Context/Expected-App-ID, Run-/Suite-ID, beobachtete App/Name/Run-Head/Suite-Head/Status/Conclusion/Completed-at/Details-URL und Observation-Digest. Keine Tokens, Authorization-Header, Cookie, vollständige Prozessumgebung, Kommentar-/Task-Body-Rohtexte, Secrets, private Clone-URLs oder unredigierte subprocess stderr. GitHub Request-ID darf gespeichert werden.
 
 ## 17. Test- und Nachweismatrix
 
@@ -624,8 +728,8 @@ Alle Python-Tests laufen über `scripts/run_tests.sh`, nie direkt über `pytest`
 5. **Intake-Race und Admission:** zwei Prozesse/Connections für denselben Key; genau ein Cycle und nach erfolgreichem Read C höchstens ein Task. Ein kontrollierter Pause-Hook nach Cycle-Commit und vor/während Read C lässt native Dispatcher-Ticks laufen; weil keine Taskzeile existiert, entsteht kein Claim/Run/PID/Worker. Read-C-Mutation bleibt `STALE` ohne Task; nur erfolgreiche Binding-Revalidation plus Task-Insert/Readback setzt `MATERIALIZED`.
 6. **Scheduler:** exakt 300 Sekunden, non-overlap, Lockfehler fail-closed, Stop/Restart, mehrere Gateways, kein LLM-/Worker-Aufruf.
 7. **State-Machines:** jede erlaubte und verbotene Transition; `STALE` nie Gate; `done` nie PASS; alte PASS nach Drift ungültig.
-8. **Revalidation/TOCTOU:** Base-Tip-, Head-, Label-, Comment-, Binding- und Ruleset-Drift zwischen A/B/C, Review und Gate. Zwei Connections aktualisieren Binding-/Projekt-/Boardwerte vor und während Admission/Materialisierung; frischer Authority-Read plus Fingerprint-CAS liefern Rollback oder `STALE` ohne Task, niemals Routing unter alter Projekt-/Board-/Orchestrierungsautorität.
-9. **CI:** pending/missing/failure/duplicate/unknown nie PASS; alle required successful am exakten Head kann PASS ermöglichen.
+8. **Revalidation/TOCTOU:** Base-Tip-, Head-, Label-, Comment-, Binding-, Policy-, Ruleset-, Producer-, Run- und Suite-Drift zwischen A/B/C, Read D und Read E. Zwei Connections aktualisieren Binding-/Projekt-/Boardwerte vor und während Admission/Materialisierung; frischer Authority-Read plus Fingerprint-CAS liefern Rollback oder `STALE` ohne Task, niemals Routing unter alter Projekt-/Board-/Orchestrierungsautorität. Policy-/Observation-Drift an jeder Revalidation-Grenze liefert `STALE`, nie Gate-Upgrade.
+9. **CI-Policy und Provenance:** same-name spoofed producer; fehlende/geänderte App-ID; duplicate trusted match; legacy context-only requirement; gleichnamige konfliktäre Rulesets/Protection; Required Workflow; keine Required Checks; 401/403/ambiguous-404; partielle Pagination; malformed Source; fehlende Suite/Run-/Suite-Head-Daten; falscher Head; fehlender Run; queued/in-progress/pending; skipped/neutral/cancelled/timed_out/action_required/stale/failure; Commit-Status-only. Jeder Fall hat exakt die Zuordnung aus 12.4 und kann nie PASS werden. Nur alle producergebundenen Tupel mit genau einer vollständigen `completed/success`-Beobachtung am exakten Head können PASS ermöglichen; Canonical-JSON-/Digest-Golden-Tests sind erforderlich.
 10. **Remediation-Tabelle:** genau zwölf autoritative Bedingungen, jede einzeln false; keine Task/Branchmutation; zehn deprecated Aggregate allein autorisieren nie. Alle zwölf true erlauben nur die transaktionale Materialisierung. Zwei Connections/Prozesse für denselben Source-Key, Spezifikationskonflikt sowie Crash vor Insert, nach Insert, vor Commit und Antwortverlust nach Commit beweisen exakt eine sichtbare Task und dieselbe `created_task_id`. Worker/Reviewer-Trennung.
 11. **Branch-CAS:** parallele Worker, Lease-Verlust, protected/default branch, untrusted fork, non-fast-forward, restart; keine unerlaubte Mutation.
 12. **Dry-Run:** Snapshot der DB-/GitHub-Fake-Zähler vor/nach; bitgleich null Writes und vollständiger deterministischer Report.
@@ -637,7 +741,7 @@ Alle Python-Tests laufen über `scripts/run_tests.sh`, nie direkt über `pytest`
 
 Vor Aktivierung MUSS ein Operator:
 
-1. Den Provenance-Gate aus Abschnitt 21 ausfuehren und das unabhaengige Contract-/Security-Review durch `agency-security-reviewer` als Review-Verdikt `PASS` nachweisen, gebunden an dieselben kanonischen Upstream-/Publikations-Repositories und exakt dieselben neun Manifestwerte für Commit, Ref, drei Pfad/Blob-Hash-Paare und frischen Upstream-`main`-Basis-SHA.
+1. Den Provenance-Gate aus Abschnitt 21 ausfuehren und das unabhaengige Contract-/Security-Review durch `agency-security-reviewer` als Review-Verdikt `PASS` nachweisen, gebunden an Vertragsversion v1.1.3, dieselben kanonischen Upstream-/Publikations-Repositories und exakt dieselben neun Manifestwerte für Commit, Ref, drei Pfad/Blob-Hash-Paare und frischen Upstream-`main`-Basis-SHA.
 2. GitHub-Write-Rechte, Label-Existenz, Ruleset-/Checks-Lesbarkeit und den tatsächlichen Fork/Remote verifizieren.
 3. Binding über die explizite CLI in `projects.db` anlegen, read-back validieren und Board-Metadaten vergleichen.
 4. `validate-bindings` und einen vollständigen `--dry-run --json` mit `writes_performed: 0` archivieren.
@@ -668,7 +772,7 @@ Vor Implementierung erneut zu verifizieren:
 
 - Der inventarisierte Upstream-`main`-SHA ist nur die Architekturbasis und kann vor Implementierung fortgeschritten sein.
 - Upstream `NousResearch/hermes-agent` gewaehrt diesem Actor nur READ. Das Publikations-Repository `Mateo817/hermes-agent` ist inzwischen als GitHub-Fork des Upstreams mit Schreibrecht verifiziert; diese Feststellung ersetzt weder den frischen Remote-Readback noch die erneute Fork-Pruefung im Provenance-Gate. Das Triggerlabel fehlte beim Inventar; Hooks waren wegen Scope nicht inventarisierbar.
-- Die konkrete `gh api`-Antwort für Required Checks unter kombinierten Branch-Protection- und Ruleset-Konfigurationen muss gegen ein berechtigtes Repository validiert werden.
+- Offizielle REST-Semantik und ein Live-Read am 2026-09-16 bestätigen für `GET /rules/branches/main` `ruleset_source_type`, `ruleset_source`, `ruleset_id` sowie `required_status_checks[].context/integration_id`; Check-Suite- und Check-Run-Reads bestätigen numerische `app.id`, Suite-ID, `head_sha`, Status, Conclusion, Completed-at und Details-URL. Das repository-gestützte `hermes_cli/kanban_pr_acceptance.py` besitzt bereits `_api()` mit `gh api`, Pagination und percent-encoded Rules-Branch sowie `collect_acceptance()` für GraphQL-Branch-Protection. Seine bestehende positive Semantik ist für diesen Vertrag ausdrücklich nicht wiederverwendbar: sie akzeptiert `app_id in (None,-1)`, Commit Statuses, `filter=latest`, liest keine Suite per ID/`head_sha` und verliert Duplicate-/Producer-Ambiguität. Die Implementierung darf den Transport extrahieren/erweitern, muss aber die schmalen v1.1.3-Ports und Tests separat erfüllen und darf weder dieses bestehende `ok` noch `gh pr checks`/`statusCheckRollup` als Provenance-Beweis behandeln. Klassische Branch Protection blieb mit dem aktuellen nicht-administrativen Actor 404/mehrdeutig und belegt gerade den vorgeschriebenen BLOCKED-Fall, nicht deren Abwesenheit.
 - Der bestehende native Task-/Orchestrierungsweg muss das exakt gebundene `orchestration_profile` als Intake-Assignee für das konfigurierte Projekt beweisbar übernehmen. Fehlt dieser Weg, ist eine separate, geprüfte Orchestrierungsintegration nötig; der Poller darf keinen globalen/default Assignee, Reviewer oder Worker wählen.
 - GitHub-Kommentarupdate bietet kein serverseitiges Body-CAS. Schema 1 kompensiert durch Read/BodHash/Update/Read und Branch-/Key-Revalidation; echte konkurrierende Kommentarautoren können weiterhin einen sichtbaren `STALE`/Konflikt erzwingen, aber keine Freigabe.
 - Filelocks auf Netzwerkdateisystemen sind nicht universell zuverlässig. Korrektheit beruht deshalb zusätzlich auf SQLite-Transaktionen und Unique Constraints.
@@ -681,11 +785,13 @@ Unmittelbar vor jeder Implementierungsaufnahme oder -fortsetzung MUSS ein fail-c
 
 1. Aus dem Release-Manifest die kanonischen GitHub-Identitaeten fuer Upstream/Basis und Publikation lesen; fuer Schema 1 muessen sie exakt `NousResearch/hermes-agent` und `Mateo817/hermes-agent` sein. GitHub muss das Publikations-Repository frisch als Fork genau dieses Upstreams ausweisen. Lokale Remote-Namen werden nur als Transportkonfiguration protokolliert und niemals als Identitaetsbeweis verwendet.
 2. `main` direkt vom genannten Upstream-Repository fetchen und den danach aufgeloesten vollen Commit als Live-Basis protokollieren; ein zuvor gespeicherter SHA oder nur ein lokaler Tracking-Ref genuegt nicht. Den finalen Nicht-Default-Ref separat direkt vom genannten Publikations-Repository fetchen.
-3. Die im unabhängigen PASS genannten neun Werte exakt aus dem Release-Manifest lesen: finaler voller Release-Commit; Remote-Ref `refs/heads/contracts/github-pr-review-dispatcher-v1.1.1-base-<base7>`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-pr-review-dispatcher-contract.md`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-hermes-development-workflow-SKILL-v5.1.md`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-pr-review-dispatcher-v1.1.1-decisions.md`; Basis-SHA. Abgekürzte SHAs, lokale-only Refs, implizite Branches oder ein Ref in einem anderen Repository sind verboten.
+3. Die im unabhängigen PASS genannten neun Werte exakt aus dem Release-Manifest lesen: finaler voller Release-Commit; Remote-Ref `refs/heads/contracts/github-pr-review-dispatcher-v1.1.3-scope3-from-2e6999f`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-pr-review-dispatcher-contract.md`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-hermes-development-workflow-SKILL-v5.1.md`; Pfad und finaler Blob-SHA-256 für `docs/kanban/github-pr-review-dispatcher-v1.1.3-decisions.md`; Basis-SHA. Abgekürzte SHAs, lokale-only Refs, implizite Branches oder ein Ref in einem anderen Repository sind verboten.
 4. Per Remote-Readback gegen das namentlich gebundene Publikations-Repository beweisen, dass der genannte Nicht-Default-Ref exakt den genannten Commit aufloest, und beweisen, dass der Commit vom genannten Upstream-Basis-SHA abstammt. Wenn Upstream-`main` seit dem PASS fortgeschritten ist, muss die Basis auf der neuen Spitze sauber neu hergestellt, der Kandidat neu gebunden, erneut publiziert und unabhaengig erneut reviewed werden; ein alter PASS darf nicht uebertragen werden.
-5. Alle drei Blobs am genannten Commit/Pfad lesen und ihre SHA-256 exakt vergleichen; ausserdem beweisen, dass der gesamte Diff von Basis bis Kandidat als geschlossene Menge genau die drei manifestierten Pfade enthaelt, dass der Contract die erwartete Vertragsversion und der Skill Version `5.1.0` nennt. Der Exact-Changed-File-Scope ist eine aus Basis/Commit abgeleitete Invariante, kein weiterer Release-Manifest-Wert.
+5. Alle drei Blobs am genannten Commit/Pfad lesen und ihre SHA-256 exakt vergleichen; ausserdem beweisen, dass der gesamte Diff von Basis bis Kandidat als geschlossene Menge genau die drei manifestierten Pfade enthaelt, dass der Contract die erwartete Vertragsversion v1.1.3 und der Skill Version `5.1.2` nennt. Der Exact-Changed-File-Scope ist eine aus Basis/Commit abgeleitete Invariante, kein weiterer Release-Manifest-Wert.
 6. Mit `git merge-base --is-ancestor` beweisen, dass der verbotene Commit `aad0cbd55e9fef41cad79f7ca6f75b0e14a74ff6` kein Vorfahr des finalen Kandidaten ist. Merge, Cherry-pick oder sonstiger Import seiner Ancestry ist verboten. Die verworfene v1.0.0-Bindung bleibt ausschliesslich historische Evidenz und kann nie Release-Autoritaet sein.
 7. Ein explizites, unabhaengiges Review-Verdikt `PASS` von `agency-security-reviewer` lesen, das dieselben zwei Repository-Identitaeten und genau dieselben neun finalen Bindungswerte nennt und keine offenen P0/P1/P2-Contract-Findings enthaelt. Taskstatus `done`, ein PASS zu einem anderen Blob/Artefaktset oder Schweigen sind kein PASS.
 8. Bei jeder fehlenden Remote-Berechtigung, jedem Fork-/Fetch-/Readback-/Hash-/Ancestry-/Scope-/Reviewer-Mismatch und jedem nicht aufloesbaren Ref mit `DO_NOT_IMPLEMENT` abbrechen. Es gibt keinen lokalen, gecachten, manuellen, Remote-Alias- oder Default-Branch-Fallback.
 
 Der Gate-Report enthaelt die zwei kanonischen Repository-Identitaeten, die neun finalen Bindungswerte, Fetch-Zeit, Remote-Readback, Fork- und Ancestry-Ergebnisse, Reviewer-Verdikt und `implementation_release_authorized: true|false`, aber keine Credentials. Nur ein vollstaendig positives Ergebnis darf die separate Implementierungs-Task manuell freigeben; dieser Architektur-Task startet sie niemals selbst.
+
+Eine spätere Runtime-Installation des manifestierten Skills verwendet `hermes -p <exact-profile> skills inspect <immutable-url>` ausschließlich als URL-/Trust-Preview; `Trust: community` ist kein PASS und kein Security-Scan. Erst `skills install` ohne `--force` führt Quarantäne-/Security-Scanning aus. Scan- oder Quarantänefehler blockieren; nach Erfolg müssen die installierten Bytes aus dem exakt aufgelösten Profilpfad erneut gelesen und gegen Manifest-Hash und Version `5.1.2` geprüft werden. Diese Regel autorisiert in diesem Architektur-Task keine Installation.

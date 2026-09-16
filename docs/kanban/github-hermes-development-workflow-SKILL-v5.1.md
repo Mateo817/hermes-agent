@@ -1,7 +1,7 @@
 ---
 name: github-hermes-development-workflow
 description: Gate GitHub changes through revision-bound Hermes review.
-version: 5.1.0
+version: 5.1.2
 author: Mateo (Mateo817), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -14,6 +14,8 @@ metadata:
 # GitHub/Hermes Development Workflow
 
 Use this workflow for repository changes that must pass an independent, revision-bound Hermes review before integration. GitHub is source of truth for code identity; Hermes is source of truth for review orchestration and gate evidence. This skill never authorizes merge, deployment, self-approval, privileged execution of untrusted code, or production activation.
+
+Release identity: contract `github-pr-review-dispatcher/v1.1.3`, publication repository `Mateo817/hermes-agent`, immutable ref `refs/heads/contracts/github-pr-review-dispatcher-v1.1.3-scope3-from-2e6999f`.
 
 ## When to Use
 
@@ -29,7 +31,7 @@ Do not use this workflow to bypass project rules, repair an ambiguous request he
 - Use the authenticated GitHub CLI through `terminal`; verify repository identity, permissions, fork ownership and write authority without printing credentials.
 - Work in a clean, task-owned development worktree and non-default branch.
 - Resolve exactly one configured repository → Hermes project → Kanban board → orchestration binding. No current/default/last-board, `hermes-system`, profile, reviewer, worker, provider, or model fallback.
-- Treat the architecture contract `github-pr-review-dispatcher/v1.1.1` as normative for Schema 1 transport and adapters.
+- Treat the architecture contract `github-pr-review-dispatcher/v1.1.3` as normative for Schema 1 transport and adapters.
 - Run Python tests through `scripts/run_tests.sh`, never direct `pytest`.
 
 ## How to Run
@@ -42,6 +44,7 @@ Load this skill for the development session, then follow the procedure in order.
 - Review key: eight ordered fields, seven LF bytes, UTF-8, SHA-256.
 - Public gate: `APPROVED|CHANGES_REQUIRED|BLOCKED|FAILED`.
 - Admission: review cycle → label reconciliation → Read C → one native task → exact readback.
+- Required CI: authoritative Base-Ref policy → exact context + GitHub App ID → exact Head suite/run → canonical digests.
 - Remediation: all twelve conditions, branch CAS, new key and independent re-review.
 - Integration: separate authority; this workflow never auto-merges.
 
@@ -179,7 +182,11 @@ Completion criterion: Read C passed, exactly one native task was created/read ba
 
 Before review work, perform Read D. Before result/gate publication, perform Read E. Both re-read exact head, explicit base-ref tip, request/comment identity, label/binding and key. Drift preserves history, marks the old lifecycle `STALE`, and forbids approval of the current PR from old evidence.
 
-Resolve required checks from authoritative GitHub branch protection/rulesets for the current base ref and exact head SHA. Bind check evidence to a trusted producer. Missing visibility is `BLOCKED`; missing/pending/failing checks are never positive.
+Resolve required checks only from authoritative GitHub policy for the current base ref. Fully paginate explicit `GET /repos/{owner}/{repo}/rules/branches/{base_ref}` and applicable Branch Protection reads with an explicit supported API version. Every required check must yield exactly `(context_name, producer_kind=github_app, producer_app_id)` with a positive numeric App ID from Ruleset `integration_id` or Branch Protection `checks.app_id`. Legacy context-only policy, null/`-1` App ID, conflicting overlapping policies, no required checks, inaccessible/partial pagination or required-workflow identity are `BLOCKED`, never positive. Do not infer policy from names, statuses, comments, workflow output, handoff text, project similarity or defaults.
+
+For the exact candidate head, fully paginate Check Suites, re-read every returned Suite by ID without prefiltering by App/name, and list every Suite's Check Runs with `filter=all`; this is required to detect a same-name spoof from another producer. Exactly one Run per policy tuple must have exact `name`, exact numeric `app.id`, matching Suite ID, Run and Suite `head_sha` equal to the candidate, `status=completed`, `conclusion=success` and valid `completed_at`. Commit Statuses never satisfy v1.1.3. Same-name wrong producer, producer change, duplicate match, missing App/Suite/Head fields, wrong head, skipped/neutral/cancelled/timed-out/action-required/stale/failure are `FAIL`/terminal `FAILED`; queued/in-progress/waiting/requested/pending are `PENDING`; absent Run is `MISSING`; unreadable or unsupported policy/observation is `BLOCKED`.
+
+Persist policy source kind/id/API identity, base ref/tip, retrieval time/ETag, sorted producer tuples and canonical policy digest. Persist context, expected App ID, Run ID, Suite ID, observed App ID/name/Run head/Suite head/status/conclusion/completed-at/details URL, separate Run/Suite retrieval time/ETag and canonical observation digest. Retrieval/transport metadata is audited but excluded from canonical digest preimages, so a fresh content-identical read remains equal. Before review (Read D) and before result/gate (Read E), re-read policy and observations completely. Any source, digest, producer, Run, Suite or identity drift marks the cycle `STALE`; cached digests are not revalidation. If access is insufficient, report the exact operator action: grant the dedicated GitHub App/fine-grained token read access to repository Administration/Rulesets and Checks/Contents/Metadata, including applicable organization/enterprise rules, then rerun; never configure a guessed App ID.
 
 Public result wire values are only `APPROVED|CHANGES_REQUIRED|BLOCKED|FAILED`. Result comments are append-only or otherwise revision-safe and include exact key/base/head, check states, findings, remediations, unresolved risks and generated timestamp. A result comment is a projection of durable review evidence, not independent authority.
 
@@ -224,7 +231,7 @@ Completion criterion: integration, if separately authorized, uses the same still
 
 - Temporary GitHub, rate-limit, database-busy or uncertain-write errors do not consume the request. Keep durable attempt/backoff state and read before retry.
 - Never mark processing successful until native task creation and exact readback commit.
-- Stable comment ambiguity, malformed/unknown schema, binding ambiguity, stale snapshot, unreadable required checks or invariant mismatch fail closed.
+- Stable comment ambiguity, malformed/unknown schema, binding ambiguity, stale snapshot, legacy/conflicting/empty/unreadable/unsupported CI policy, incomplete check pagination or invariant mismatch fail closed.
 - Dry-run performs the same reads and validations but makes zero GitHub, database, task, lockfile, branch, workspace, configuration, worker or model writes.
 - Logs exclude tokens, headers, cookies, secrets, raw private URLs and unredacted subprocess error bodies.
 
@@ -240,7 +247,7 @@ Record exact commands, commit/ref and one of `PASS|FAIL|NOT_RUN|BLOCKED` for:
 - Unchanged native Kanban decomposition/dependency/dispatch/retry/escalation behavior.
 - Public result mapping; `NOT_RUN` and internal `PASS` never leak as public gates.
 - All twelve remediation conditions independently false and collectively true.
-- Required-CI provenance, fork/untrusted safety and branch CAS.
+- Required-CI provenance: same-name spoof, missing/changed App ID, duplicate match, legacy context-only, conflicting/changed rules, no requirements, inaccessible/partial policy, unsupported workflow requirement, missing Suite/Head, wrong Head, absent/pending/skipped/neutral/failure and drift at both Read D/E boundaries; plus fork/untrusted safety and branch CAS.
 - Profile A → B → A isolation and profile-scoped config/credentials.
 - Real Windows-marked behavior on Windows and full E2E chains.
 - `git diff --check`, repository checks and required CI.
@@ -253,5 +260,5 @@ Do not conclude `DONE`, `IMPLEMENTED`, or `APPROVED` from helper functions, a dr
 - Unicode-normalizing a ref changes identity even when display text looks equivalent.
 - A mutable result/comment cannot authorize itself; durable reviewed evidence and current key do.
 - A commit containing this skill does not install or activate it. Runtime profiles have isolated skill homes and sessions cache loaded skills.
-- Installing with `--force` bypasses a security verdict; do not use it in the standard installation plan.
+- `hermes skills inspect <immutable-url>` is only immutable-URL preview/trust evidence and may report `Trust: community`; it is not a PASS or security scan. Actual profile-scoped `hermes -p <profile> skills install <immutable-url> --yes` without `--force` performs quarantine/security scanning. A scan/quarantine verdict blocks installation, and success still requires reading back installed bytes/version/hash for that exact profile. Never use `--force` in the standard plan.
 - The dispatcher remains disabled until implementation, independent reviews, required CI, dry-run and explicit operator activation all pass.
