@@ -350,8 +350,9 @@ class GatewayKanbanWatchersMixin:
             await asyncio.sleep(5)
             while self._running:
                 try:
-                    from hermes_cli.pr_review_dispatcher import poll_once
-                    report = await _to_thread_process_service(poll_once)
+                    from hermes_cli.pr_review_dispatcher import assemble_dispatcher_adapters, poll_once
+                    github, bindings = assemble_dispatcher_adapters()
+                    report = await _to_thread_process_service(lambda: poll_once(github=github, bindings=bindings))
                     logger.info("github PR review poll complete: candidates=%d writes=%d", len(report.candidates), report.writes_performed)
                 except asyncio.CancelledError:
                     raise

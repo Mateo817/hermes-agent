@@ -1256,8 +1256,13 @@ def _cmd_pr_review(args: argparse.Namespace) -> int:
     """Run the model-free PR review poller; no implicit board is consulted."""
     if getattr(args, "pr_review_action", None) != "poll":
         return _err("kanban pr-review: choose an action (currently: poll)", 2)
-    from hermes_cli.pr_review_dispatcher import poll_once
-    report = poll_once(dry_run=bool(getattr(args, "dry_run", False)),
+    from hermes_cli.pr_review_dispatcher import assemble_dispatcher_adapters, poll_once
+    try:
+        github, bindings = assemble_dispatcher_adapters()
+    except Exception:
+        github = bindings = None
+    report = poll_once(github=github, bindings=bindings,
+                       dry_run=bool(getattr(args, "dry_run", False)),
                        repository=getattr(args, "repository", None))
     payload = report.as_dict()
     if getattr(args, "json", False):

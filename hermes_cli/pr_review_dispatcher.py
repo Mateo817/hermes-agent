@@ -1009,6 +1009,231 @@ class PollReport:
                 "errors": list(self.errors)}
 
 
+class DispatcherBindingError(RuntimeError):
+    """A repository binding is absent, ambiguous, or no longer authoritative."""
+
+
+def _invoke(obj: Any, names: Sequence[str], *args: Any, **kwargs: Any) -> Any:
+    """Call one of an adapter's explicitly named port methods.
+
+    Ports are deliberately duck-typed so the CLI, gateway, and isolated tests can
+    assemble the same controller without importing a particular board client.
+    No fallback value is returned: an absent port is a configuration failure.
+    """
+    for name in names:
+        method = getattr(obj, name, None)
+        if callable(method):
+            return method(*args, **kwargs)
+    raise DispatcherBindingError(f"adapter port unavailable: {'/'.join(names)}")
+
+
+def _dispatcher_state_db() -> Path:
+    root = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    return root / "kanban" / "github-pr-review-dispatcher.db"
+
+
+def _init_dispatcher_state(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""CREATE TABLE IF NOT EXISTS review_cycles (
+        review_key TEXT PRIMARY KEY, repository TEXT NOT NULL, pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL, lifecycle TEXT NOT NULL, admission TEXT NOT NULL,
+        task_id TEXT, binding_fingerprint TEXT NOT NULL, updated_at INTEGER NOT NULL,
+        UNIQUE(repository, pr_number, review_key))""")
+    return conn
+
+
+def _binding_for(bindings: Any, repository: str) -> Mapping[str, Any]:
+    value = _invoke(bindings, ("resolve_repository", "resolve_binding", "binding_for"), repository)
+    if not isinstance(value, Mapping):
+        raise DispatcherBindingError("repository binding response is not an object")
+    required = ("project_id", "board", "orchestration_profile", "binding_revision")
+    if any(not value.get(k) for k in required):
+        raise DispatcherBindingError("repository binding is incomplete")
+    # This workflow is intentionally exact: no current-board/name/default lookup.
+    if value["project_id"] != "p_41500605" or value["board"] != "hermes-system":
+        raise DispatcherBindingError("repository binding is not the configured project/board")
+    return value
+
+
+class HermesProjectBindingAdapter:
+    """Explicit profile-scoped project/board port for the native Kanban store."""
+
+    def resolve_repository(self, repository: str) -> Mapping[str, Any]:
+        from hermes_cli import projects_db
+        with projects_db.connect_closing() as conn:
+            binding = projects_db.get_repository_binding(conn, canonical_repository(repository), enabled_only=True)
+            if not binding or binding["project_id"] != "p_41500605":
+                raise DispatcherBindingError("enabled repository binding is absent")
+            project = conn.execute("SELECT board_slug FROM projects WHERE id=?", (binding["project_id"],)).fetchone()
+            if not project or project["board_slug"] != "hermes-system":
+                raise DispatcherBindingError("project board authority is not hermes-system")
+            return {**binding, "board": "hermes-system"}
+
+    def create_native_task(self, identity: Mapping[str, Any], review_key: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_db_connect as kbc
+        body = json.dumps({"schema_version": 1, "review_key": review_key, "identity": dict(identity)}, sort_keys=True)
+        with kbc.connect_closing(board="hermes-system") as conn:
+            task_id = kb.create_task(conn, title=f"Review PR #{identity['pr_number']}", body=body,
+                assignee=str(binding["orchestration_profile"]), created_by="github-pr-review",
+                idempotency_key=review_key, triage=True, initial_status="triage",
+                board="hermes-system", project_id="p_41500605")
+            return {"id": task_id, "review_key": review_key}
+
+    def read_native_task(self, task_id: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
+        from hermes_cli import kanban_db as kb
+        from hermes_cli import kanban_db_connect as kbc
+        with kbc.connect_closing(board="hermes-system") as conn:
+            task = kb.get_task(conn, task_id)
+            if task is None:
+                raise RuntimeError("native task readback missing")
+            return {"id": task.id, "review_key": task.idempotency_key, "status": task.status,
+                    "assignee": task.assignee, "project_id": task.project_id}
+
+    def dispatch_native_task(self, task_id: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
+        from hermes_cli import kanban_db_dispatch as kbd
+        from hermes_cli import kanban_db_connect as kbc
+        with kbc.connect_closing(board="hermes-system") as conn:
+            result = kbd.dispatch_once(conn, dry_run=False)
+            return {"spawned": getattr(result, "spawned", [])}
+
+
+def assemble_dispatcher_adapters() -> tuple[GitHubCLI, HermesProjectBindingAdapter]:
+    """Build the one shared adapter assembly used by CLI and Gateway."""
+    return GitHubCLI(), HermesProjectBindingAdapter()
+
+
+def _read_cycle(conn: sqlite3.Connection, key: str) -> sqlite3.Row | None:
+    conn.row_factory = sqlite3.Row
+    return conn.execute("SELECT * FROM review_cycles WHERE review_key=?", (key,)).fetchone()
+
+
+def _persist_cycle(conn: sqlite3.Connection, identity: Mapping[str, Any], key: str,
+                   binding: Mapping[str, Any], *, lifecycle: str, admission: str,
+                   task_id: str | None = None) -> None:
+    conn.execute("""INSERT INTO review_cycles
+        (review_key,repository,pr_number,head_sha,lifecycle,admission,task_id,
+         binding_fingerprint,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(review_key) DO UPDATE SET lifecycle=excluded.lifecycle,
+         admission=excluded.admission, task_id=COALESCE(excluded.task_id,task_id),
+         updated_at=excluded.updated_at""", (
+        key, identity["repository"], identity["pr_number"], identity["head_sha"],
+        lifecycle, admission, task_id,
+        binding_fingerprint(repository=identity["repository"], project_id=str(binding["project_id"]),
+                            board_slug=str(binding["board"]), orchestration_profile=str(binding["orchestration_profile"]),
+                            binding_revision=int(binding["binding_revision"])), int(time.time())))
+
+
+def _claim_materialization(conn: sqlite3.Connection, key: str) -> bool:
+    """CAS the durable cycle into its single native-task write owner."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        changed = conn.execute(
+            "UPDATE review_cycles SET lifecycle='MATERIALIZING_TASK', admission='MATERIALIZING_TASK', updated_at=? "
+            "WHERE review_key=? AND task_id IS NULL AND (lifecycle='CLAIMED' OR (lifecycle='MATERIALIZING_TASK' AND updated_at < ?))", (int(time.time()), key, int(time.time()) - 300)
+        ).rowcount
+        conn.commit()
+        return changed == 1
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _process_review(ref: PullRequestRef, github: Any, bindings: Any, conn: sqlite3.Connection | None,
+                    *, dry_run: bool) -> dict[str, Any]:
+    """Run Read A–E and native admission for one candidate.
+
+    Every mutating port is reached only after identity, binding, policy, and
+    producer-bound CI checks have been re-read.  Existing cycles are reconciled
+    before another task creation attempt, which covers unknown-write recovery.
+    """
+    first = _invoke(github, ("read_pull_request",), ref.repository, ref.number)
+    if not isinstance(first, PullRequestSnapshot) or not first.open or first.draft:
+        return {"repository": ref.repository, "pr_number": ref.number, "status": "STALE"}
+    identity = normalize_review_identity(repository=first.repository, pr_number=first.number,
+        base_ref=first.base_ref, base_sha=first.base_sha, head_repository=first.head_repository,
+        head_ref=first.head_ref, head_sha=first.head_sha)
+    key = compute_review_key(identity)
+    comments = _invoke(github, ("list_issue_comments",), identity["repository"], identity["pr_number"])
+    request_comments = [comment for comment in comments if REVIEW_REQUEST_MARKER in getattr(comment, "body", "")]
+    if len(request_comments) != 1:
+        raise RuntimeError("request comment identity is ambiguous")
+    request = parse_request_comment(request_comments[0].body)
+    if request["review_key"] != key:
+        raise RuntimeError("request comment is stale")
+    binding = _binding_for(bindings, identity["repository"])
+    fp = binding_fingerprint(repository=identity["repository"], project_id=str(binding["project_id"]),
+                              board_slug=str(binding["board"]), orchestration_profile=str(binding["orchestration_profile"]),
+                              binding_revision=int(binding["binding_revision"]))
+    existing = _read_cycle(conn, key) if conn is not None else None
+    if existing and existing["binding_fingerprint"] != fp:
+        raise DispatcherBindingError("cycle binding fingerprint changed")
+    policy = _invoke(github, ("read_required_check_policy",), identity["repository"], identity["base_ref"], identity["base_sha"])
+    suites = _invoke(github, ("read_check_suites",), identity["repository"], identity["head_sha"])
+    checks: list[dict[str, Any]] = []
+    for suite in suites:
+        sid = suite.get("id") if isinstance(suite, Mapping) else None
+        if not isinstance(sid, int):
+            raise RuntimeError("invalid check suite identity")
+        observed = _invoke(github, ("read_check_suite",), identity["repository"], sid)
+        runs = _invoke(github, ("read_check_runs",), identity["repository"], sid, filter="all")
+        for run in runs:
+            if isinstance(run, Mapping):
+                checks.append({"name": run.get("name"), "app_id": (run.get("app") or {}).get("id", run.get("app_id")),
+                               "status": run.get("status"), "conclusion": run.get("conclusion"),
+                               "head_sha": run.get("head_sha"), "suite_id": observed.get("id", sid)})
+    ci = validate_required_ci({"readable": True, "head_sha": identity["head_sha"],
+                               "required": policy.get("required", []), "checks": checks})
+    if ci != "PASS":
+        raise RuntimeError(f"required CI is {ci}")
+    # Read D immediately before admission.  A second PR read catches ref/base drift.
+    second = _invoke(github, ("read_pull_request",), ref.repository, ref.number)
+    if second != first:
+        raise RuntimeError("PR identity drift at Read D")
+    if not existing and not dry_run:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _persist_cycle(conn, identity, key, binding, lifecycle="CLAIMED", admission="PENDING_READ_C")
+            conn.commit()
+        except Exception:
+            conn.rollback(); raise
+    if dry_run:
+        return {"repository": identity["repository"], "pr_number": identity["pr_number"], "review_key": key,
+                "status": "READY", "ci": ci, "dry_run": True}
+    if existing is not None and existing["task_id"]:
+        recovered = _invoke(bindings, ("read_native_task", "read_task"), existing["task_id"], binding)
+        if isinstance(recovered, Mapping) and recovered.get("id") == existing["task_id"]:
+            return {"repository": identity["repository"], "pr_number": identity["pr_number"],
+                    "review_key": key, "status": "DISPATCHED", "task_id": existing["task_id"],
+                    "recovered": True, "ci": ci}
+    # Read C and native task creation/readback are delegated to configured Hermes ports.
+    current = _invoke(github, ("read_pull_request",), ref.repository, ref.number)
+    if current != first:
+        raise RuntimeError("PR identity drift at Read C")
+    assert conn is not None
+    if not _claim_materialization(conn, key):
+        raise RuntimeError("cycle is already claimed by another poller")
+    task = _invoke(bindings, ("create_native_task", "create_task"), identity, key, binding)
+    task_id = task.get("id") if isinstance(task, Mapping) else task
+    if not isinstance(task_id, str):
+        raise RuntimeError("native task creation returned no task id")
+    readback = _invoke(bindings, ("read_native_task", "read_task"), task_id, binding)
+    if not isinstance(readback, Mapping) or readback.get("id") != task_id or readback.get("review_key", key) != key:
+        raise RuntimeError("native task readback mismatch")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _persist_cycle(conn, identity, key, binding, lifecycle="TASK_CREATED", admission="MATERIALIZED", task_id=task_id)
+        conn.commit()
+    except Exception:
+        conn.rollback(); raise
+    _invoke(bindings, ("dispatch_native_task", "dispatch_task"), task_id, binding)
+    return {"repository": identity["repository"], "pr_number": identity["pr_number"], "review_key": key,
+            "status": "DISPATCHED", "task_id": task_id, "ci": ci}
+
+
 def poll_once(*, github: Any = None, bindings: Any = None, dry_run: bool = False,
               repository: str | None = None, max_candidates: int = 50) -> PollReport:
     """Deterministic poll entry point; adapters own all external side effects.
@@ -1021,10 +1246,22 @@ def poll_once(*, github: Any = None, bindings: Any = None, dry_run: bool = False
         # particular, the gateway must not report a successful no-op while the
         # production repository/project/board adapter is absent.
         return PollReport(dry_run=dry_run, errors=("ADAPTERS_NOT_CONFIGURED",))
-    refs = github.list_candidates(repository, "hermes-review-requested")
+    refs = _invoke(github, ("list_candidates",), repository, "hermes-review-requested")
     refs = sorted(refs, key=lambda ref: (str(ref.repository).lower(), int(ref.number)))[:max_candidates]
     processed = []
-    for ref in refs:
-        processed.append({"repository": canonical_repository(ref.repository), "pr_number": int(ref.number),
-                          "dry_run": dry_run, "status": "CANDIDATE"})
-    return PollReport(tuple(processed), tuple(processed), 0 if dry_run else 0, dry_run)
+    errors = []
+    state = None if dry_run else _init_dispatcher_state(_dispatcher_state_db())
+    try:
+        for ref in refs:
+            item = {"repository": canonical_repository(ref.repository), "pr_number": int(ref.number)}
+            try:
+                result = _process_review(ref, github, bindings, state, dry_run=dry_run)
+                processed.append({**item, **result})
+            except Exception as exc:
+                errors.append(f"{item['repository']}#{item['pr_number']}: {type(exc).__name__}")
+                processed.append({**item, "status": "BLOCKED"})
+    finally:
+        if state is not None:
+            state.close()
+    writes = sum(1 for item in processed if item.get("status") in {"DISPATCHED"})
+    return PollReport(tuple(processed), tuple(processed), writes, dry_run, tuple(errors))

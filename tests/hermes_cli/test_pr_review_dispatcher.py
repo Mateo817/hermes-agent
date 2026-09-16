@@ -16,6 +16,8 @@ from hermes_cli.pr_review_dispatcher import (
     validate_required_ci,
     validate_runtime_config,
 )
+from hermes_cli.pr_review_dispatcher import (IssueComment, PullRequestRef, PullRequestSnapshot,
+                                              REVIEW_REQUEST_MARKER, poll_once)
 
 
 @pytest.fixture
@@ -71,3 +73,80 @@ def test_remediation_has_exactly_twelve_cumulative_conditions():
     assert remediation_eligibility(values)["eligible"]
     values["trusted_head_cas"] = False
     assert not remediation_eligibility(values)["eligible"]
+
+
+class _Github:
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.writes = 0
+
+    def list_candidates(self, repository, label):
+        return [PullRequestRef("o/r", 1)]
+
+    def read_pull_request(self, repository, number):
+        return self.snapshot
+
+    def list_issue_comments(self, repository, number):
+        identity = normalize_review_identity(repository=self.snapshot.repository, pr_number=self.snapshot.number,
+            base_ref=self.snapshot.base_ref, base_sha=self.snapshot.base_sha,
+            head_repository=self.snapshot.head_repository, head_ref=self.snapshot.head_ref,
+            head_sha=self.snapshot.head_sha)
+        payload = dict(identity, review_key=compute_review_key(identity), requested_at="2026-09-16T10:00:00Z",
+                       handoff={"summary": "Review", "changed_files": [], "test_commands": [], "known_risks": []})
+        return [IssueComment(1, REVIEW_REQUEST_MARKER + "\n```json\n" + json.dumps(payload) + "\n```")]
+
+    def read_required_check_policy(self, repository, base_ref, base_sha):
+        return {"required": [{"name": "All required checks pass", "app_id": 15368}]}
+
+    def read_check_suites(self, repository, head_sha):
+        return [{"id": 1}]
+
+    def read_check_suite(self, repository, suite_id):
+        return {"id": suite_id, "head_sha": "b" * 40}
+
+    def read_check_runs(self, repository, suite_id, *, filter):
+        return [{"name": "All required checks pass", "app": {"id": 15368},
+                 "status": "completed", "conclusion": "success", "head_sha": "b" * 40}]
+
+
+class _Bindings:
+    def __init__(self):
+        self.created = 0
+        self.key = None
+
+    def resolve_repository(self, repository):
+        return {"project_id": "p_41500605", "board": "hermes-system",
+                "orchestration_profile": "orchestrator", "binding_revision": 1}
+
+    def create_native_task(self, identity, key, binding):
+        self.created += 1
+        self.key = key
+        return {"id": "t_12345678", "review_key": key}
+
+    def read_native_task(self, task_id, binding):
+        return {"id": task_id, "review_key": self.key}
+
+    def dispatch_native_task(self, task_id, binding):
+        return {"spawned": []}
+
+
+def test_poll_once_dry_run_uses_assembled_ports_without_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    snapshot = PullRequestSnapshot("o/r", 1, True, False, "main", "a" * 40,
+                                   "fork/r", "feature", "b" * 40)
+    github, bindings = _Github(snapshot), _Bindings()
+    report = poll_once(github=github, bindings=bindings, dry_run=True)
+    assert report.writes_performed == 0
+    assert report.errors == ()
+    assert bindings.created == 0
+
+
+def test_poll_once_materializes_one_native_task(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    snapshot = PullRequestSnapshot("o/r", 1, True, False, "main", "a" * 40,
+                                   "fork/r", "feature", "b" * 40)
+    bindings = _Bindings()
+    report = poll_once(github=_Github(snapshot), bindings=bindings)
+    assert report.errors == ()
+    assert report.writes_performed == 1
+    assert bindings.created == 1
