@@ -6,10 +6,10 @@ Architektur-Task: `t_8a99f79d` (Remediation von `t_48b63e1b`)
 Inventar-Task: `t_58d44561`
 Inventarisierte Upstream-Revision: `682a95258ce9e877cfb607a5ada6436183efdebb`
 Inventar: `github-kanban-scheduler-inventory-2026-09-16.md`, 19149 Bytes, SHA-256 `bc29b43dc5c556698b3f3ecb0c0442a45c794cc847695039b6d04f0a90676d2f`
-Kanonisches Upstream-/Basis-Repository: GitHub `NousResearch/hermes-agent`; saubere Remediation-Basis nach erneutem Remote-Fetch am 2026-09-16: `7b6e0d3848cea58a1e784c80cccd446073e78828`
-Dauerhaftes Publikations-Repository: GitHub `Mateo817/hermes-agent`, von GitHub als Fork von `NousResearch/hermes-agent` ausgewiesen; autoritativer Nicht-Default-Ref: `refs/heads/contracts/github-pr-review-dispatcher-v1.1.0`
+Kanonisches Upstream-/Basis-Repository: GitHub `NousResearch/hermes-agent`; saubere Remediation-Basis nach erneutem Remote-Fetch am 2026-09-16: `741fa6acc1545f0d1cd307ea96f0cba7023ad450`
+Dauerhaftes Publikations-Repository: GitHub `Mateo817/hermes-agent`, von GitHub als Fork von `NousResearch/hermes-agent` ausgewiesen; autoritativer Nicht-Default-Ref: `refs/heads/contracts/github-pr-review-dispatcher-v1.1.0-base-741fa6a`
 Verworfene Evidenzbindung (keine Autoritaet): Commit `bf2c55cdd8777d0c3e45095ea3a76e939d33fc5e`, Ref `refs/heads/contracts/github-pr-review-dispatcher-v1.0.0`, Blob-SHA-256 `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`, verbotener Parent `aad0cbd55e9fef41cad79f7ca6f75b0e14a74ff6`
-Byte-identischer Transfer auf sauberer Basis: Commit `350c96f264a84909d90dc5c87fcadb04ad493611`, SHA-256 erneut `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`
+Byte-identischer Transfer auf sauberer Basis: Commit `ca1ebca7097461383301f5b66b90795c3ad3bde4`, SHA-256 erneut `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`
 
 ## 1. Zweck, Geltung und harte Grenzen
 
