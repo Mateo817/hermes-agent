@@ -1264,7 +1264,7 @@ def _cmd_pr_review(args: argparse.Namespace) -> int:
         _print_json(payload, ascii=True)
     else:
         print(f"PR review poll: {len(report.processed)} candidate(s); writes={report.writes_performed}")
-    return 0
+    return 1 if report.errors else 0
 
 
 _HANDLERS = {

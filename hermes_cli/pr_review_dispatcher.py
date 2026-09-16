@@ -20,13 +20,10 @@ import tomllib
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - exercised on Windows
-    fcntl = None
+from urllib.parse import quote
 
 TASK_ID_RE = re.compile(r"^t_[0-9a-f]{8}$")
 BOARD_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -539,12 +536,11 @@ def board_lock(board: str, key: str, home: Path | None = None):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{board}.{hashlib.sha256(key.encode()).hexdigest()}.lock"
     with path.open("a+") as fh:
-        if fcntl is None:  # conservative: no unverified Windows fallback here
-            raise RuntimeError("exclusive lock unavailable")
-        try: fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc: raise RuntimeError("controller lock is busy") from exc
+        from hermes_cli.kanban_db_connect import _try_lock_nb, _unlock
+        if not _try_lock_nb(fh):
+            raise RuntimeError("controller lock is busy")
         try: yield
-        finally: fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally: _unlock(fh)
 
 
 @contextlib.contextmanager
@@ -560,13 +556,11 @@ def intent_lock(intent: str, home: Path | None = None):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{hashlib.sha256(intent.encode()).hexdigest()}.lock"
     with path.open("a+") as fh:
-        if fcntl is None:
+        from hermes_cli.kanban_db_connect import _try_lock_nb, _unlock
+        if not _try_lock_nb(fh):
             raise RuntimeError("exclusive intent lock unavailable")
-        try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        try: yield
+        finally: _unlock(fh)
 
 
 @contextlib.contextmanager
@@ -670,7 +664,7 @@ LIFECYCLE_STATES = frozenset({
     "COMPLETED", "BLOCKED", "STALE",
 })
 GATE_STATES = frozenset({"NOT_RUN", "PASS", "CHANGES_REQUIRED", "BLOCKED"})
-ADMISSION_STATES = frozenset({"PENDING_READ_C", "PROMOTED", "STALE"})
+ADMISSION_STATES = frozenset({"PENDING_READ_C", "MATERIALIZING_TASK", "MATERIALIZED", "STALE"})
 
 
 @dataclass(frozen=True)
@@ -702,13 +696,13 @@ class IssueComment:
 
 
 class GitHubCLI:
-    """Small authenticated GitHub port backed by ``gh api`` argument lists."""
+    """Small authenticated GitHub port backed by fixed-host GETs."""
 
     def __init__(self, executable: str = "gh", timeout: int = 30):
         self.executable, self.timeout = executable, timeout
 
     def _api(self, *parts: str) -> Any:
-        argv = [self.executable, "api", *parts]
+        argv = [self.executable, "api", "--hostname", "github.com", "--method", "GET", *parts]
         try:
             result = subprocess.run(argv, shell=False, check=True, text=True,
                                     encoding="utf-8", capture_output=True, timeout=self.timeout)
@@ -716,26 +710,108 @@ class GitHubCLI:
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             raise RuntimeError("GitHub API operation failed") from exc
 
+    def _pages(self, endpoint: str, *fields: str) -> list[dict[str, Any]]:
+        pages = self._api(endpoint, *fields, "--paginate", "--slurp")
+        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+            raise RuntimeError("GitHub returned invalid pagination")
+        rows = [row for page in pages for row in page]
+        if any(not isinstance(row, dict) for row in rows):
+            raise RuntimeError("GitHub returned invalid pagination row")
+        return rows
+
     def list_candidates(self, repository: str | None, label: str) -> list[PullRequestRef]:
         if repository is not None:
             repository = canonical_repository(repository)
-            rows = self._api(f"repos/{repository}/issues", "-f", f"labels={label}", "-f", "state=open", "--paginate")
-            rows = rows if isinstance(rows, list) else []
-            return [PullRequestRef(repository, int(row["number"])) for row in rows if row.get("pull_request")]
+            rows = self._pages(f"repos/{repository}/issues", "-f", f"labels={label}", "-f", "state=open")
+            numbers = {int(row["number"]) for row in rows if row.get("pull_request")}
+            if any(number <= 0 for number in numbers):
+                raise RuntimeError("GitHub returned an invalid pull request number")
+            return [PullRequestRef(repository, number) for number in sorted(numbers)]
         raise ValueError("repository binding is required; global search is not authoritative")
 
     def read_pull_request(self, repository: str, number: int) -> PullRequestSnapshot:
         repository = canonical_repository(repository)
-        row = self._api(f"repos/{repository}/pulls/{int(number)}")
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise ValueError("pr_number must be positive")
+        row = self._api(f"repos/{repository}/pulls/{number}")
         base = row.get("base", {})
         head = row.get("head", {})
         head_repo = (head.get("repo") or {}).get("full_name") or head.get("repo", {}).get("nameWithOwner")
-        return PullRequestSnapshot(repository, int(number), row.get("state") == "open", bool(row.get("draft")),
-            base.get("ref", ""), base.get("sha", ""), head_repo or "", head.get("ref", ""), head.get("sha", ""), row.get("updated_at", ""))
+        base_ref = _canonical_ref(base.get("ref", ""), "base_ref")
+        base_tip = self._api(f"repos/{repository}/git/ref/heads/{quote(base_ref, safe='')}")
+        if base_tip.get("ref") != f"refs/heads/{base_ref}" or base_tip.get("object", {}).get("type") != "commit":
+            raise RuntimeError("GitHub returned an invalid base-ref tip")
+        return PullRequestSnapshot(repository, number, row.get("state") == "open", bool(row.get("draft")),
+            base_ref, base_tip.get("object", {}).get("sha", ""), head_repo or "", head.get("ref", ""), head.get("sha", ""), row.get("updated_at", ""))
 
     def list_issue_comments(self, repository: str, number: int) -> list[IssueComment]:
-        rows = self._api(f"repos/{canonical_repository(repository)}/issues/{int(number)}/comments", "--paginate")
-        return [IssueComment(int(row["id"]), row.get("body", ""), (row.get("user") or {}).get("login", ""), row.get("updated_at", "")) for row in (rows if isinstance(rows, list) else [])]
+        rows = self._pages(f"repos/{canonical_repository(repository)}/issues/{int(number)}/comments")
+        return [IssueComment(int(row["id"]), row.get("body", ""), (row.get("user") or {}).get("login", ""), row.get("updated_at", "")) for row in rows]
+
+    def read_required_check_policy(self, repository: str, base_ref: str, base_tip: str) -> dict[str, Any]:
+        """Read only producer-bound required checks for one current base tip.
+
+        The caller must persist the returned source/evidence and re-read it at
+        Read D/E.  Legacy ``contexts`` entries and workflow rules are rejected
+        instead of being guessed into an App identity.
+        """
+        repository = canonical_repository(repository)
+        base_ref = _canonical_ref(base_ref, "base_ref")
+        if not FULL_SHA_RE.fullmatch(base_tip):
+            raise ValueError("invalid base tip")
+        rules = self._pages(f"repos/{repository}/rules/branches/{quote(base_ref, safe='')}" , "-f", "per_page=100")
+        protection = self._api(f"repos/{repository}/branches/{quote(base_ref, safe='')}/protection")
+        required: list[dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                raise RuntimeError("invalid ruleset response")
+            rule_type = rule.get("type")
+            if rule_type == "workflows":
+                raise RuntimeError("unsupported required workflow policy")
+            if rule_type != "required_status_checks":
+                continue
+            checks = (rule.get("parameters") or {}).get("required_status_checks", rule.get("required_status_checks", []))
+            for check in checks:
+                app_id = check.get("integration_id")
+                if not isinstance(check.get("context"), str) or type(app_id) is not int or app_id <= 0:
+                    raise RuntimeError("unreadable producer-bound ruleset")
+                required.append({"name": check["context"], "app_id": app_id})
+            sources.append({"kind": "ruleset", "id": rule.get("id"), "source": rule.get("source")})
+        status = (protection or {}).get("required_status_checks") if isinstance(protection, dict) else None
+        if status is not None:
+            checks = status.get("checks")
+            if not isinstance(checks, list):
+                raise RuntimeError("unreadable branch protection policy")
+            if status.get("contexts"):
+                raise RuntimeError("legacy context-only policy is unsupported")
+            for check in checks:
+                app_id = check.get("app_id")
+                if not isinstance(check.get("context"), str) or type(app_id) is not int or app_id <= 0:
+                    raise RuntimeError("unreadable producer-bound protection")
+                required.append({"name": check["context"], "app_id": app_id})
+            sources.append({"kind": "branch_protection", "id": repository, "source": "protection"})
+        tuples = {(item["name"], item["app_id"]) for item in required}
+        if not tuples or len(tuples) != len({item["name"] for item in required}):
+            raise RuntimeError("required-check policy is empty or ambiguous")
+        return {"base_ref": base_ref, "base_tip": base_tip,
+                "required": sorted(required, key=lambda item: (item["name"], item["app_id"])),
+                "sources": sources}
+
+    def read_check_suites(self, repository: str, head_sha: str) -> list[dict[str, Any]]:
+        repository = canonical_repository(repository)
+        if not FULL_SHA_RE.fullmatch(head_sha):
+            raise ValueError("invalid head sha")
+        return self._pages(f"repos/{repository}/commits/{head_sha}/check-suites", "-f", "per_page=100")
+
+    def read_check_suite(self, repository: str, suite_id: int) -> dict[str, Any]:
+        return self._api(f"repos/{canonical_repository(repository)}/check-suites/{int(suite_id)}")
+
+    def read_check_runs(self, repository: str, suite_id: int, *, filter: str = "all") -> list[dict[str, Any]]:
+        if filter != "all":
+            raise ValueError("v1.1.3 requires filter=all")
+        rows = self._pages(f"repos/{canonical_repository(repository)}/check-suites/{int(suite_id)}/check-runs", "-f", "per_page=100", "-f", "filter=all")
+        return rows
 
 
 def canonical_repository(value: str) -> str:
@@ -748,10 +824,12 @@ def canonical_repository(value: str) -> str:
 def _canonical_ref(value: str, name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"invalid {name}")
-    value = unicodedata.normalize("NFC", value)
     if not value or value != value.strip() or "\n" in value or "\x00" in value:
         raise ValueError(f"invalid {name}")
-    if ".." in value or value.startswith("/") or value.endswith("/") or "//" in value:
+    if (".." in value or value.startswith(("/", "-")) or value.endswith(("/", "."))
+            or "//" in value or value == "@" or "@{" in value
+            or any(c in value for c in " ~^:?*[\\")
+            or any(part.startswith(".") or part.endswith(".lock") for part in value.split("/"))):
         raise ValueError(f"invalid {name}")
     if any(unicodedata.category(c).startswith("C") for c in value):
         raise ValueError(f"invalid {name}")
@@ -763,8 +841,6 @@ def normalize_review_identity(*, repository: str, pr_number: int, base_ref: str,
                               head_sha: str) -> dict[str, Any]:
     if isinstance(pr_number, bool) or not isinstance(pr_number, int) or pr_number <= 0:
         raise ValueError("pr_number must be a positive integer")
-    base_sha = str(base_sha).lower()
-    head_sha = str(head_sha).lower()
     if not FULL_SHA_RE.fullmatch(base_sha) or not FULL_SHA_RE.fullmatch(head_sha):
         raise ValueError("full lowercase SHAs are required")
     return {"schema_version": 1, "repository": canonical_repository(repository),
@@ -789,10 +865,10 @@ def compute_review_key(identity: Mapping[str, Any]) -> str:
 
 def parse_request_comment(body: str) -> dict[str, Any]:
     """Parse exactly one marker followed by one JSON fenced block."""
-    if not isinstance(body, str) or not body.startswith(REVIEW_REQUEST_MARKER):
+    if not isinstance(body, str) or not body.startswith(REVIEW_REQUEST_MARKER + "\n"):
         raise ValueError("REQUEST_COMMENT_MISSING")
     tail = body[len(REVIEW_REQUEST_MARKER):].strip()
-    match = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", tail, re.DOTALL)
+    match = re.fullmatch(r"```json[ \t]*\n(.*?)\n```", tail, re.DOTALL)
     if not match or tail.count("```") != 2:
         raise ValueError("MALFORMED_REQUEST")
     duplicate = False
@@ -808,7 +884,7 @@ def parse_request_comment(body: str) -> dict[str, Any]:
         value = json.loads(match.group(1), object_pairs_hook=hook)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValueError("MALFORMED_REQUEST") from exc
-    if duplicate or not isinstance(value, dict) or value.get("schema_version") != 1:
+    if duplicate or not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") != 1:
         raise ValueError("MALFORMED_REQUEST")
     required = {"review_key", "repository", "pr_number", "base_ref", "base_sha",
                 "head_repository", "head_ref", "head_sha", "requested_at", "handoff"}
@@ -818,15 +894,29 @@ def parse_request_comment(body: str) -> dict[str, Any]:
             or value["pr_number"] <= 0):
         raise ValueError("MALFORMED_REQUEST")
     try:
-        normalize_review_identity(**{key: value[key] for key in (
+        normalized = normalize_review_identity(**{key: value[key] for key in (
             "repository", "pr_number", "base_ref", "base_sha",
             "head_repository", "head_ref", "head_sha")})
     except (TypeError, ValueError) as exc:
         raise ValueError("MALFORMED_REQUEST") from exc
     handoff = value.get("handoff")
-    if not isinstance(handoff, Mapping) or not isinstance(handoff.get("summary"), str):
+    if not isinstance(value.get("requested_at"), str):
         raise ValueError("MALFORMED_REQUEST")
-    return value
+    try:
+        datetime.fromisoformat(value["requested_at"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("MALFORMED_REQUEST") from exc
+    if not isinstance(handoff, Mapping) or not isinstance(handoff.get("summary"), str) or not handoff["summary"].strip():
+        raise ValueError("MALFORMED_REQUEST")
+    for field_name in ("changed_files", "test_commands", "known_risks"):
+        items = handoff.get(field_name)
+        if not isinstance(items, list) or len(items) > 200 or not all(isinstance(item, str) and item.strip() for item in items):
+            raise ValueError("MALFORMED_REQUEST")
+        if field_name == "changed_files" and any(item.startswith(("/", "\\")) or ".." in item.split("/") for item in items):
+            raise ValueError("MALFORMED_REQUEST")
+    if value["review_key"] != compute_review_key(normalized):
+        raise ValueError("REQUEST_MISMATCH")
+    return {**value, **normalized}
 
 
 def binding_fingerprint(*, repository: str, project_id: str, board_slug: str,
@@ -857,18 +947,36 @@ def validate_required_ci(snapshot: Mapping[str, Any]) -> str:
     required = snapshot.get("required")
     if not isinstance(checks, list) or not isinstance(required, list) or not required:
         return "MISSING"
-    names = [str(item.get("name")) for item in checks if isinstance(item, Mapping)]
-    if len(names) != len(set(names)) or any(name not in names for name in required):
+    required_tuples = []
+    for item in required:
+        if not isinstance(item, Mapping) or not isinstance(item.get("name"), str) or type(item.get("app_id")) is not int or item["app_id"] <= 0:
+            return "BLOCKED"
+        required_tuples.append((item["name"], item["app_id"]))
+    if len(required_tuples) != len(set(required_tuples)):
         return "MISSING"
-    if any(item.get("conclusion") not in {"success"} for item in checks if item.get("name") in required):
-        return "FAIL" if any(item.get("conclusion") in {"failure", "cancelled", "timed_out", "action_required"} for item in checks) else "PENDING"
+    matches = []
+    candidate_head = snapshot.get("head_sha")
+    if not isinstance(candidate_head, str) or not FULL_SHA_RE.fullmatch(candidate_head):
+        return "BLOCKED"
+    for name, app_id in required_tuples:
+        named = [item for item in checks if isinstance(item, Mapping) and item.get("name") == name]
+        if len(named) != 1:
+            return "FAIL" if named else "MISSING"
+        if named[0].get("app_id") != app_id:
+            return "FAIL"
+        matches.append(named[0])
+    if any(item.get("status") in {"queued", "in_progress", "waiting", "requested", "pending"} for item in matches):
+        return "PENDING"
+    if any(item.get("status") != "completed" or item.get("conclusion") != "success" or item.get("head_sha") != candidate_head for item in matches):
+        return "FAIL"
     return "PASS"
 
 
 def remediation_eligibility(conditions: Mapping[str, bool]) -> dict[str, Any]:
-    names = ("small_findings", "unique_source", "limited_change", "complete_todo",
-             "trusted_head", "safe_branch", "current_cas", "exclusive_serialization",
-             "separate_identities", "verifiable_completion")
+    names = ("documented_finding", "scope_unchanged", "no_new_product_requirement",
+             "no_new_architecture", "no_public_api_change", "no_schema_change",
+             "no_security_boundary_change", "no_external_integration", "verifiable_completion",
+             "existing_pr_branch_only", "trusted_head_cas", "bounded_separate_worker")
     values = {name: conditions.get(name) is True for name in names}
     return {"eligible": all(values.values()), "conditions": values,
             "failure": None if all(values.values()) else "REMEDIATION_INELIGIBLE"}
@@ -879,8 +987,12 @@ def validate_state(lifecycle: str, gate: str, admission: str) -> None:
         raise ValueError("invalid PR review state")
     if gate == "PASS" and lifecycle in {"STALE", "BLOCKED"}:
         raise ValueError("STALE/BLOCKED lifecycle cannot authorize PASS")
-    if admission == "PROMOTED" and lifecycle not in {"IN_REVIEW", "REMEDIATION_PENDING", "REMEDIATING", "REREVIEW_REQUESTED", "COMPLETED"}:
-        raise ValueError("promoted admission has invalid lifecycle")
+    if admission == "PENDING_READ_C" and lifecycle not in {"DISCOVERED", "CLAIMED"}:
+        raise ValueError("pending admission has invalid lifecycle")
+    if admission == "MATERIALIZING_TASK" and lifecycle not in {"CLAIMED", "IN_REVIEW"}:
+        raise ValueError("materializing admission has invalid lifecycle")
+    if admission == "MATERIALIZED" and lifecycle not in {"IN_REVIEW", "COMPLETED", "REMEDIATION_PENDING", "REMEDIATING", "REREVIEW_REQUESTED"}:
+        raise ValueError("materialized admission has invalid lifecycle")
 
 
 @dataclass(frozen=True)
@@ -889,10 +1001,12 @@ class PollReport:
     processed: tuple[dict[str, Any], ...] = ()
     writes_performed: int = 0
     dry_run: bool = False
+    errors: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {"candidates": list(self.candidates), "processed": list(self.processed),
-                "writes_performed": self.writes_performed, "dry_run": self.dry_run}
+                "writes_performed": self.writes_performed, "dry_run": self.dry_run,
+                "errors": list(self.errors)}
 
 
 def poll_once(*, github: Any = None, bindings: Any = None, dry_run: bool = False,
@@ -903,7 +1017,10 @@ def poll_once(*, github: Any = None, bindings: Any = None, dry_run: bool = False
     are not supplied.  Production wiring must inject both ports explicitly.
     """
     if github is None or bindings is None:
-        return PollReport(dry_run=dry_run)
+        # A null adapter set is an integration failure, not an empty queue.  In
+        # particular, the gateway must not report a successful no-op while the
+        # production repository/project/board adapter is absent.
+        return PollReport(dry_run=dry_run, errors=("ADAPTERS_NOT_CONFIGURED",))
     refs = github.list_candidates(repository, "hermes-review-requested")
     refs = sorted(refs, key=lambda ref: (str(ref.repository).lower(), int(ref.number)))[:max_candidates]
     processed = []

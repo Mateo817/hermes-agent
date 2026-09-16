@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import os
 import time
 from pathlib import Path
@@ -343,11 +342,8 @@ class GatewayKanbanWatchersMixin:
             return
         from hermes_constants import get_hermes_home
         lock_path = get_hermes_home() / "kanban" / ".github-pr-review-dispatcher.lock"
-        try:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            handle = lock_path.open("a+")
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError):
+        handle, lock_state = _acquire_singleton_lock(lock_path)
+        if lock_state != "held":
             logger.info("github PR review watcher skipped: OVERLAP_SKIPPED")
             return
         try:
@@ -363,9 +359,7 @@ class GatewayKanbanWatchersMixin:
                     logger.exception("github PR review poll failed")
                 await self._sleep_between_ticks(300)
         finally:
-            with contextlib.suppress(Exception):
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            handle.close()
+            _release_singleton_lock(handle)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

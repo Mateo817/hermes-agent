@@ -22,7 +22,7 @@ from hermes_cli.pr_review_dispatcher import (
 def identity():
     return normalize_review_identity(
         repository="NousResearch/hermes-agent", pr_number=7, base_ref="main",
-        base_sha="A" * 40, head_repository="Mateo817/hermes-agent",
+        base_sha="a" * 40, head_repository="Mateo817/hermes-agent",
         head_ref="Feature/Mixed", head_sha="b" * 40,
     )
 
@@ -57,14 +57,17 @@ def test_binding_fingerprint_is_exact_and_config_fails_closed():
     assert not validate_runtime_config({"kanban": {"github_pr_review": {"interval_seconds": 60}}})["valid"]
 
 
-def test_ci_requires_every_required_check_success():
-    assert validate_required_ci({"readable": True, "required": ["unit"], "checks": [{"name": "unit", "conclusion": "success"}]}) == "PASS"
-    assert validate_required_ci({"readable": True, "required": ["unit"], "checks": [{"name": "unit", "conclusion": "queued"}]}) == "PENDING"
-    assert validate_required_ci({"readable": False, "required": ["unit"], "checks": []}) == "BLOCKED"
+def test_ci_requires_producer_bound_completed_check_success():
+    required = [{"name": "unit", "app_id": 42}]
+    passing = {"name": "unit", "app_id": 42, "status": "completed", "conclusion": "success", "head_sha": "a" * 40}
+    snapshot = {"readable": True, "head_sha": "a" * 40, "required": required, "checks": [passing]}
+    assert validate_required_ci(snapshot) == "PASS"
+    assert validate_required_ci({**snapshot, "checks": [{**passing, "status": "queued"}]}) == "PENDING"
+    assert validate_required_ci({"readable": False, "required": required, "checks": []}) == "BLOCKED"
 
 
-def test_remediation_has_exactly_ten_cumulative_conditions():
-    values = {name: True for name in ("small_findings", "unique_source", "limited_change", "complete_todo", "trusted_head", "safe_branch", "current_cas", "exclusive_serialization", "separate_identities", "verifiable_completion")}
+def test_remediation_has_exactly_twelve_cumulative_conditions():
+    values = {name: True for name in ("documented_finding", "scope_unchanged", "no_new_product_requirement", "no_new_architecture", "no_public_api_change", "no_schema_change", "no_security_boundary_change", "no_external_integration", "verifiable_completion", "existing_pr_branch_only", "trusted_head_cas", "bounded_separate_worker")}
     assert remediation_eligibility(values)["eligible"]
-    values["safe_branch"] = False
+    values["trusted_head_cas"] = False
     assert not remediation_eligibility(values)["eligible"]
