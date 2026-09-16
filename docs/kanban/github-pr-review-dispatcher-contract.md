@@ -1,15 +1,20 @@
 # Deterministischer GitHub-PR-Review-Dispatcher: Architekturvertrag
 
-Status: bindender Vorimplementierungsvertrag, Schema 1
-Vertragsversion: `github-pr-review-dispatcher/v1.0.0`
-Architektur-Task: `t_48b63e1b`
+Status: revidierter Vorimplementierungsvertrag, Schema 1; Implementierung bis gebundenem Independent-PASS verboten
+Vertragsversion: `github-pr-review-dispatcher/v1.1.0`
+Architektur-Task: `t_8a99f79d` (Remediation von `t_48b63e1b`)
 Inventar-Task: `t_58d44561`
 Inventarisierte Upstream-Revision: `682a95258ce9e877cfb607a5ada6436183efdebb`
 Inventar: `github-kanban-scheduler-inventory-2026-09-16.md`, 19149 Bytes, SHA-256 `bc29b43dc5c556698b3f3ecb0c0442a45c794cc847695039b6d04f0a90676d2f`
+Saubere Remediation-Basis: `origin/main` nach erneutem Fetch am 2026-09-16, `7b6e0d3848cea58a1e784c80cccd446073e78828`
+Verworfene Evidenzbindung (keine Autoritaet): Commit `bf2c55cdd8777d0c3e45095ea3a76e939d33fc5e`, Ref `refs/heads/contracts/github-pr-review-dispatcher-v1.0.0`, Blob-SHA-256 `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`, verbotener Parent `aad0cbd55e9fef41cad79f7ca6f75b0e14a74ff6`
+Byte-identischer Transfer auf sauberer Basis: Commit `350c96f264a84909d90dc5c87fcadb04ad493611`, SHA-256 erneut `4108af3c8a8abd75c98acf165a2843301e4a5287a32865aff89b9c81a7dccb39`
 
 ## 1. Zweck, Geltung und harte Grenzen
 
 Dieser Vertrag definiert genau eine minimale Integrationsfläche für einen deterministischen, modellfreien Poller, der explizit angeforderte GitHub-Pull-Request-Reviews als bestehende Hermes-Kanban-Aufgaben materialisiert. Er ist revisionsgebunden an das oben bezeichnete Inventar; die Implementierung muss Abweichungen zur tatsächlichen Implementierungsbasis erneut prüfen.
+
+Dieser Text allein autorisiert keine Implementierung. Die einzige Implementierungsfreigabe ist ein explizites `PASS` des fuer diesen Vertrag vorgeschriebenen unabhaengigen Reviewers `agency-security-reviewer` zu einem externen Release-Manifest, das den finalen vollen Contract-Commit-SHA, den dauerhaft auf `origin` publizierten Nicht-Default-Ref, diesen Pfad, den finalen Blob-SHA-256 und den unmittelbar vorher frisch gelesenen `origin/main`-Basis-SHA exakt nennt. Fehlt ein Wert, weicht er ab, ist der Ref nicht remote lesbar oder nennt das PASS nur die verworfene Evidenzbindung, bleibt die Implementierung verboten.
 
 Normative Begriffe `MUSS`, `DARF NICHT`, `SOLL` und `KANN` sind verbindlich. Bei fehlenden, widersprüchlichen oder mehrdeutigen Daten gilt fail-closed: keine Task-Erzeugung, keine Review-Freigabe und keine Branch-Mutation.
 
@@ -49,7 +54,7 @@ Ein manueller Operatorpfad erweitert `hermes kanban` um `pr-review poll`. Er ruf
 |---|---|---|
 | `hermes_cli/pr_review_dispatcher.py` | Neu: Datentypen, Parser, Normalisierung, Review-Key, GitHub-Port, Poll-/Revalidate-Logik, State-Machine, CI-Gate, Remediation-Prädikat, Dry-Run-Report | Domänenpolicy; kennt keine Gateway- oder Modellobjekte |
 | `hermes_cli/projects_db.py` | Additive Migration und CRUD/Validierung für `project_repository_bindings` | kanonische Routing-Konfiguration |
-| `hermes_cli/kanban_db.py` | Additive Tabellen/Operationen für Zyklen, Attempts, Events und TODOs; atomare Cycle+Task-Erzeugung | review-spezifische Durable State im Ziel-Board |
+| `hermes_cli/kanban_db.py` | Additive Tabellen/Operationen für Zyklen, Attempts, Events und TODOs; nicht dispatchbarer Admission-Status; atomare Cycle+Task-Erzeugung und CAS-Promotion | review-spezifische Durable State im Ziel-Board |
 | `gateway/kanban_watchers.py` | Config-gesteuerter 300-Sekunden-Watcher; Start/Stop; machine-globaler fail-closed Poller-Lock | Scheduling/Prozessintegration |
 | `hermes_cli/config_defaults.py` | Additive nicht-geheime `kanban.github_pr_review`-Konfiguration | Aktivierungs- und Betriebsparameter |
 | `hermes_cli/kanban.py` | `pr-review poll --dry-run --json` und explizite Binding-Verwaltung/Validierung | Operatoroberfläche |
@@ -93,13 +98,21 @@ CREATE TABLE IF NOT EXISTS project_repository_bindings (
     project_id              TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     orchestration_profile   TEXT NOT NULL,
     enabled                 INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+    binding_revision        INTEGER NOT NULL DEFAULT 1 CHECK (binding_revision > 0),
     created_at              INTEGER NOT NULL,
+    updated_at              INTEGER NOT NULL,
+    CHECK (repository = lower(repository))
+);
+
+CREATE TABLE IF NOT EXISTS project_repository_binding_versions (
+    repository              TEXT PRIMARY KEY,
+    last_revision           INTEGER NOT NULL CHECK (last_revision > 0),
     updated_at              INTEGER NOT NULL,
     CHECK (repository = lower(repository))
 );
 ```
 
-`repository` ist der kanonische GitHub-Name `owner/name` in lowercase. `project_id` zeigt auf genau einen nicht archivierten `projects`-Datensatz. Das Zielboard ist ausschließlich dessen nichtleeres `projects.board_slug`; es wird nicht in der Binding-Tabelle dupliziert. `orchestration_profile` ist das projektspezifisch konfigurierte Routingziel und nichtleer. Es gibt bewusst keine globale Orchestrator-Konstante und `kanban.orchestrator_profile` ist für diesen Dispatcher kein Fallback. Der Poller übernimmt diesen Wert unverändert als Orchestrierungs-Assignee des Intake-Tasks; er wählt damit weder den eigentlichen Review- noch einen Remediation-Worker.
+`repository` ist der kanonische GitHub-Name `owner/name` in lowercase. `project_id` zeigt auf genau einen nicht archivierten `projects`-Datensatz. Das Zielboard ist ausschließlich dessen nichtleeres `projects.board_slug`; es wird nicht in der Binding-Tabelle dupliziert. `orchestration_profile` ist das projektspezifisch konfigurierte Routingziel und nichtleer. `project_repository_binding_versions` ist ein nie geloeschtes High-Water-Ledger. Jede autoritative Aenderung der Binding-Zeile oder eines ihrer aufgeloesten Authority-Werte reserviert innerhalb derselben `BEGIN IMMEDIATE`-Transaktion `last_revision + 1` und schreibt genau diesen Wert als `binding_revision`; erstmalige Anlage beginnt bei 1. Delete deaktiviert/entfernt nur die Binding-Zeile, nie das Ledger, sodass Recreate keine Revision wiederverwenden kann. Aenderungen an `projects.board_slug`, Projektarchivstatus oder gebundener Board-Metadaten-`project_id` muessen denselben Guard nehmen und alle betroffenen Binding-Revisionen atomar erhoehen oder werden abgelehnt. Es gibt bewusst keine globale Orchestrator-Konstante und `kanban.orchestrator_profile` ist für diesen Dispatcher kein Fallback. Der Poller übernimmt `orchestration_profile` unverändert als Orchestrierungs-Assignee des Intake-Tasks; er wählt damit weder den eigentlichen Review- noch einen Remediation-Worker.
 
 Das Board selbst MUSS anhand des expliziten Slugs geöffnet werden. Seine Metadaten MÜSSEN `project_id` gleich dem gebundenen Projekt ausweisen. Auflösungen über `get_current_board()`, persistierten current-board pointer, Umgebungsvariable ohne Binding, `default` oder Namensgleichheit sind verboten.
 
@@ -116,7 +129,21 @@ Beim Aktivieren, beim manuellen Poll und vor jeder Task-Transaktion werden alle 
 
 Jeder Fehler ergibt `BINDING_MISSING`, `BINDING_AMBIGUOUS` oder `BINDING_INVALID`, schreibt keinen Task und löst keine Board-/Profil-Defaults aus.
 
-### 4.3 Laufzeitkonfiguration
+### 4.3 Kanonischer Binding-Fingerprint und Binding-Guard
+
+Nach erfolgreicher Aufloesung wird eine immutable Authority-Snapshot-Version erzeugt. Das Preimage besteht aus genau sechs UTF-8-Feldern in dieser Reihenfolge, mit genau fuenf ASCII-LF und ohne trailing LF:
+
+```text
+binding/v1\nrepository\nproject_id\nboard_slug\norchestration_profile\nbinding_revision
+```
+
+Repository ist lowercase; `project_id`, `board_slug` und Profil sind die unveraenderten kanonischen Persistenzwerte; `binding_revision` ist positive kanonische Dezimaldarstellung. `binding_fingerprint = sha256(preimage).hexdigest()` in lowercase. Version, Fingerprint und alle aufgeloesten Felder werden gemeinsam im Cycle und im Task-Body gespeichert. Ein Timestamp ist kein Versionsersatz.
+
+Alle Binding-Schreiber, alle Schreiber der oben genannten aufgeloesten Projekt-/Board-Authority-Werte sowie Intake und Promotion verwenden dieselbe Sperrordnung: (1) `BEGIN IMMEDIATE` auf dem profilbezogenen `projects.db`, (2) Binding/Projekt/Board/Fingerprint frisch lesen, (3) erst dann `BEGIN IMMEDIATE` auf genau dem gebundenen Board, (4) Board-CAS ausfuehren und committen, (5) danach die `projects.db`-Transaktion committen/freigeben. Kein anderer Pfad darf diese Authority-Werte fuer ein gebundenes Repository schreiben. Damit kann eine Binding-Aenderung weder zwischen Authority-Read und Intake-Commit noch zwischen Authority-Read und Promotion-Commit eintreten. Lock-/Read-/CAS-Fehler rollen die Board-Transaktion zurueck oder lassen den Task nicht dispatchbar. Die Sperrordnung darf nirgends invertiert werden.
+
+Der Guard wird zweimal vollstaendig ausgefuehrt: unmittelbar vor der dauerhaften Intake-Schreibtransaktion und unmittelbar vor der Admission-Promotion nach Read C. Beim zweiten Lauf muessen Revision, Fingerprint und alle vier aufgeloesten Identitaeten bytegleich mit dem gespeicherten Snapshot sein. Mutation oder Mismatch erzeugt `BINDING_CHANGED`, setzt den Cycle `STALE`, behaelt den Task in `admission_pending` und routet niemals unter alter Autoritaet. Eine spaetere Binding-Aenderung kann einen bereits gestarteten Review nicht umleiten; Read D muss ihn vor fachlicher Arbeit erneut gegen den gespeicherten Fingerprint revalidieren und andernfalls ohne Gate-Aenderung `STALE` setzen.
+
+### 4.4 Laufzeitkonfiguration
 
 Additiv in `DEFAULT_CONFIG["kanban"]["github_pr_review"]`:
 
@@ -277,10 +304,13 @@ CREATE TABLE IF NOT EXISTS pr_review_cycles (
     project_id              TEXT NOT NULL,
     board_slug              TEXT NOT NULL,
     orchestration_profile   TEXT NOT NULL,
+    binding_revision        INTEGER NOT NULL,
+    binding_fingerprint     TEXT NOT NULL,
     request_comment_id      INTEGER NOT NULL,
     request_body_sha256     TEXT NOT NULL,
     task_type               TEXT NOT NULL CHECK (task_type = 'pull_request_review'),
     task_id                 TEXT UNIQUE,
+    admission_status        TEXT NOT NULL,
     lifecycle               TEXT NOT NULL,
     gate                    TEXT NOT NULL,
     required_ci             TEXT NOT NULL,
@@ -331,6 +361,7 @@ CREATE TABLE IF NOT EXISTS pr_review_todos (
     worker_profile       TEXT NOT NULL,
     workspace_path       TEXT NOT NULL,
     expected_head_sha    TEXT NOT NULL,
+    materialization_hash TEXT NOT NULL,
     claim_owner          TEXT,
     claim_expires        INTEGER,
     status               TEXT NOT NULL,
@@ -344,6 +375,8 @@ CREATE TABLE IF NOT EXISTS pr_review_todos (
 
 `lifecycle`, `gate`, `required_ci`, attempt status und TODO status werden zusätzlich in Python gegen die geschlossenen Mengen dieses Vertrags validiert; SQLite-`CHECK`s SOLLEN diese Mengen spiegeln. Migrationen dürfen bestehende Tasktabellen nicht umdeuten.
 
+`admission_status` ist die geschlossene Menge `PENDING_READ_C`, `PROMOTED`, `STALE`. Fuer Remediation-TODOs ist `status` mindestens `MATERIALIZING`, `TASK_CREATED`, `CLAIMED`, `COMPLETED`, `BLOCKED`; `materialization_hash` ist SHA-256 der kanonischen immutable Task-Spezifikation. Zusaetzlich MUESSEN zwei migrationsgepruefte partielle Unique-Indizes auf `tasks(idempotency_key)` ueber alle Task-Lifecycle-Zustaende einschliesslich `archived` hoechstens einen Task fuer jeden nichtleeren Key mit Prefix `pull_request_review:` beziehungsweise `pull_request_remediation:` zulassen; die Praedikate sind feste Schema-1-Konstanten, nicht vom Aufrufer waehlbar. Findet die Migration bereits Duplikate, bricht sie fail-closed ab und publiziert keinen davon als gueltigen Review-/Remediation-Task. Archivierung autorisiert keinen Ersatz-Task fuer denselben Review- oder Source-Key.
+
 ### 7.2 Task-Typ und immutable Metadaten
 
 Das bestehende `tasks`-Schema besitzt keinen Task-Typ. Daher wird ein regulärer Kanban-Task erzeugt und `pull_request_review` revisionssicher in `pr_review_cycles.task_type` sowie in einem kanonischen JSON-Block im Task-Body abgebildet. Der Block enthält mindestens:
@@ -352,30 +385,31 @@ Das bestehende `tasks`-Schema besitzt keinen Task-Typ. Daher wird ein regulärer
 - Repository/PR URL und Nummer
 - Base-/Head-Repository, Refs und volle SHAs
 - `request_comment_id` und Request-Body-Hash
-- `project_id`, expliziter `board_slug`, Binding-Revision (`updated_at`)
+- `project_id`, expliziter `board_slug`, `binding_revision`, `binding_fingerprint` und die vier kanonischen Authority-Felder
 - Handoff: Summary, Changed Files, Testbefehle, bekannte Risiken
 - Pflichtaktionen: GitHub frisch lesen; vor Review und vor Gate revalidieren; CI prüfen; kein Merge
 - Audit-IDs und erlaubte Gate-/Lifecycle-Werte
 
 Der Task erhält `project_id`, den vorhandenen projektgebundenen `workspace_kind=worktree`-Pfad, `idempotency_key="pull_request_review:" + review_key` und exakt den gebundenen `orchestration_profile` als Orchestrierungs-Assignee. Dieses Feld ist ein konfiguriertes Routingziel, keine Pollerentscheidung über Reviewer oder ausführenden Remediation-Worker. `skills`, `model_override`, `provider_override`, `reasoning_effort` und Reviewer bleiben NULL/leer. Die gebundene Orchestrierung muss den Intake über ihren bestehenden, separat verantworteten Ablauf weiter routen. Falls dieses Profil nicht installiert oder nicht als Orchestrierungsweg verwendbar ist, ist die Binding-/Orchestrierungsfähigkeit `BINDING_INVALID` und kein Task wird erzeugt.
 
-## 8. Transaktionen, Idempotenz und Claim
+## 8. Transaktionen, Idempotenz und Admission
 
 `tasks.idempotency_key` ist derzeit nur normal indexiert; `create_task()` dokumentiert eine akzeptierte Race, bei der konkurrierende Inserts Duplikate erzeugen können. Diese Semantik reicht für Review-Key-Exactly-Once nicht aus. Die Review-Tabelle mit `review_key PRIMARY KEY` und `task_id UNIQUE` ist daher die normative Idempotenzgrenze.
 
-Atomare Materialisierung im explizit gebundenen Board:
+Atomare, noch nicht dispatchbare Materialisierung im explizit gebundenen Board:
 
-1. GitHub-Read und Binding-Validierung erfolgen außerhalb der Write-Transaktion.
-2. Unmittelbar vor dem Write wird GitHub erneut gelesen und der Snapshot bytegenau verglichen.
-3. `BEGIN IMMEDIATE` über den vorhandenen `write_txn` startet.
-4. `pr_review_subjects` wird auf stabile Comment-ID geprüft/eingefügt.
-5. `pr_review_cycles` wird mit `lifecycle='CLAIMED'`, `gate='NOT_RUN'` eingefügt. Ein Unique-Konflikt bedeutet deterministisches `ALREADY_EXISTS`, nicht Retry/Create.
-6. Innerhalb derselben Connection und Transaktion ruft der Code `create_task(..., board=<explicit>, project_id=<exact>, idempotency_key=...)` mit nested transaction support auf.
-7. Der erzeugte Task wird anhand ID, `project_id`, Body-Key und idempotency key zurückgelesen. Erst danach werden `task_id` gesetzt und Lifecycle `TASK_CREATED` geschrieben.
-8. Task- und Review-Events werden in derselben Transaktion geschrieben; dann Commit.
-9. Nur nach bestätigtem Commit darf der Poller den Trigger-Label-Write durchführen. Ein Prozess darf niemals auf Basis einer uncommitteten Claim-Zeile gestartet werden; normaler Kanban-Dispatch sieht den Task erst nach Commit.
+1. GitHub-Read A und erste Binding-Validierung erfolgen außerhalb der Write-Transaktion.
+2. Unmittelbar vor dem Write wird GitHub als Read B erneut gelesen und der Snapshot bytegenau verglichen.
+3. Der Binding-Guard aus 4.3 startet, liest die Autoritaet erneut und haelt die `projects.db`-Write-Sperre.
+4. `BEGIN IMMEDIATE` ueber den vorhandenen Board-`write_txn` startet.
+5. `pr_review_subjects` wird auf stabile Comment-ID geprueft/eingefuegt.
+6. `pr_review_cycles` wird mit `lifecycle='CLAIMED'`, `admission_status='PENDING_READ_C'`, `gate='NOT_RUN'`, Binding-Version und Fingerprint eingefuegt. Ein Unique-Konflikt bedeutet deterministisches `ALREADY_EXISTS`, nicht Retry/Create.
+7. Innerhalb derselben Connection und Transaktion erzeugt eine review-spezifische Primitive den Task mit `status='admission_pending'`. Dieser Status wird additiv in der Kanban-Statusmenge eingefuehrt, ist aber weder `ready`, `review`, `todo`, `blocked` noch `scheduled` und darf von `recompute_ready`, `promote_task`, `unblock_task`, `reopen_review_task`, `claim_task`, `claim_review_task`, Stale-Reclaim oder Dispatcher-Recovery nicht veraendert oder beansprucht werden. Ausschliesslich die CAS-Promotion dieses Vertrags darf ihn verlassen.
+8. Der erzeugte Task wird anhand ID, Status, Assignee, `project_id`, Body-Key, Binding-Fingerprint und Idempotency-Key zurueckgelesen. Erst danach werden `task_id` gesetzt und Lifecycle `TASK_CREATED` geschrieben.
+9. Task- und Review-Events werden in derselben Board-Transaktion geschrieben; Board-Commit und danach Freigabe des Binding-Guards.
+10. Nur nach bestaetigtem Commit darf der Poller den Trigger-Label-Write durchfuehren. Bis zur spaeteren Promotion ist der sichtbare Task unveraenderlich dispatch-ineligible; es existieren kein Claim, kein `task_run`, kein Worker-PID und kein Workspace-Start.
 
-Jeder Fehler vor Commit rollt Cycle und Task gemeinsam zurück. Crash nach Commit vor Label-Entfernung ist sicher: der nächste Lauf findet denselben Review-Key und reconciled ausschließlich die ausstehende Label-Projektion. Crash nach GitHub-Write vor Attempt-Abschluss wird read-before-retry reconciled. Es gibt keinen Delete-and-recreate-Pfad für Zyklen.
+Jeder Fehler vor Commit rollt Cycle und Task gemeinsam zurück. Crash nach Commit vor Label-Entfernung oder Read C ist sicher: der nächste Lauf findet denselben Review-Key und reconciled ausschliesslich die ausstehende Label-Projektion, waehrend der Task `admission_pending` bleibt. Crash nach GitHub-Write vor Attempt-Abschluss wird read-before-retry reconciled. Es gibt keinen Delete-and-recreate-Pfad für Zyklen und keine generische/operatorische Abkuerzung aus `admission_pending`.
 
 ## 9. Scheduler, Locks und Parallelität
 
@@ -398,9 +432,11 @@ Für jeden Kandidaten:
 5. Eindeutige Binding-Auflösung und Board-Readback.
 6. Persistenz-Lookup: existierender Key wird reconciled, nicht neu erzeugt.
 7. Read B unmittelbar vor der Transaktion. PR-Node-ID, open state, draft state, Base-/Head-Werte, Base-Tip, Label, Comment-ID, Body-Hash und `updated_at` müssen A entsprechen.
-8. Atomare Claim-/Task-Erzeugung.
+8. Atomare Cycle-/Task-Erzeugung als `admission_status=PENDING_READ_C` / Taskstatus `admission_pending`; noch kein Dispatch.
 9. GitHub-Write: Triggerlabel für genau diesen Key entfernen. Der Request-Kommentar bleibt als stabile Historie bestehen.
-10. Read C bestätigt Labelzustand und unveränderte Identität. Mismatch erzeugt Event und Retry oder `STALE`, nie ein zweites Task.
+10. Read C liest nach dem Write PR-Node-ID, open/draft, Base-/Head-Repository/Ref/SHA, aktuellen Base-Tip, Labelzustand, stabile Comment-ID, Body-Hash/`updated_at` und Result-Marker erneut. Alle Identitaets- und Requestwerte muessen Read B entsprechen und nur das erwartete Triggerlabel darf entfernt sein.
+11. Nach erfolgreichem Read C wird der Binding-Guard erneut genommen. Innerhalb seiner Board-Transaktion bestaetigt ein einziges CAS `review_key`, gespeicherten Binding-Fingerprint, `lifecycle='TASK_CREATED'`, `admission_status='PENDING_READ_C'`, Task-ID, Taskstatus `admission_pending` und Abwesenheit von Claim/Run/Worker. Derselbe CAS setzt Cycle `admission_status='PROMOTED'`, Lifecycle `IN_REVIEW` und Taskstatus `ready`; Event und Statuswechsel committen atomar. Erst dieser Commit macht den Task claimbar.
+12. Scheitert Read C oder der zweite Binding-/CAS-Check permanent, setzt eine Board-Transaktion Cycle und Admission `STALE`, waehrend der Task dauerhaft `admission_pending` bleibt. Bei transient/ungewissem Read-C-Ausgang bleibt `PENDING_READ_C` unveraendert und wird read-before-retry reconciled. Weder Fehlerpfad darf `ready`, Claim oder Worker erzeugen.
 
 Vor Beginn eines menschlichen/agentischen Reviews MUSS der Review-Worker über eine schmale `revalidate_for_review(review_key)`-Operation Read D durchführen. Vor jedem Gate-/Result-Write MUSS `revalidate_for_gate(review_key)` Read E durchführen. Beide vergleichen aktuelle Base-/Head-/Request-/Bindingwerte und Key. Jede Abweichung setzt Lifecycle `STALE`, lässt das Gate unverändert (`NOT_RUN`, `CHANGES_REQUIRED`, `BLOCKED` oder historisches `PASS`) und verbietet die Verwendung des alten Resultats für den aktuellen PR.
 
@@ -414,7 +450,7 @@ Geschlossene Menge:
 
 Erlaubte Übergänge:
 
-- `DISCOVERED -> CLAIMED -> TASK_CREATED -> IN_REVIEW`
+- `DISCOVERED -> CLAIMED -> TASK_CREATED`; erst erfolgreiche Read-C-/Binding-CAS-Promotion erlaubt `TASK_CREATED -> IN_REVIEW`
 - `IN_REVIEW -> COMPLETED` bei terminalem, revalidiertem Gate
 - `IN_REVIEW -> REMEDIATION_PENDING -> REMEDIATING`
 - `REMEDIATING -> STALE` für den alten Key, nachdem ein Worker-Commit einen neuen Head erzeugt hat
@@ -424,7 +460,11 @@ Erlaubte Übergänge:
 
 `STALE` ist terminal für genau diesen Key; es kann nicht zurück nach `IN_REVIEW`. Ein neuer Commit ist ein neuer Zyklus.
 
-### 11.2 Gate
+### 11.2 Admission
+
+`PENDING_READ_C -> PROMOTED` ist nur durch den in Abschnitt 10 beschriebenen atomaren CAS erlaubt. `PENDING_READ_C -> STALE` ist terminal. `PROMOTED` und `STALE` sind immutable. Fuer jeden Cycle gilt: `admission_status != PROMOTED` impliziert Taskstatus `admission_pending`, keine Claim-Felder, keinen offenen `task_run`, keinen Workerprozess und keine Dispatch-Queue-Aufnahme. Die Dispatcher-Query filtert positiv nur ihre bisherigen dispatchbaren Statuswerte und muss zusaetzlich durch einen Test beweisen, dass `admission_pending` nie selektiert wird.
+
+### 11.3 Gate
 
 Geschlossene Menge: `NOT_RUN`, `PASS`, `CHANGES_REQUIRED`, `BLOCKED`.
 
@@ -433,7 +473,7 @@ Geschlossene Menge: `NOT_RUN`, `PASS`, `CHANGES_REQUIRED`, `BLOCKED`.
 - `BLOCKED` beschreibt fehlende externe Fähigkeit, mehrdeutige Identität oder Vertragsverletzung.
 - Ein historisches Gate wird nie in `STALE` umbenannt. Die aktuelle Gültigkeit ergibt sich aus dem Lifecycle und exakt passendem Key.
 
-### 11.3 Triggerlabel
+### 11.4 Triggerlabel
 
 - Label + valider Request sind gemeinsam Admission.
 - Vor erfolgreichem Cycle+Task-Commit bleibt das Label bei transienten und permanenten Fehlern unverändert, damit kein Request verloren geht.
@@ -470,6 +510,20 @@ Scheitert eine Bedingung, wird keine Remediation-Task erzeugt. Das Gate bleibt/w
 
 Jeder Remediation-TODO-Datensatz enthält die in `pr_review_todos` dargestellten Felder. Sein Kanban-Body spiegelt mindestens TODO-ID, Finding-ID, Source-Key/Head, Ziel, Scope, Komponenten, Acceptance, Tests, Branch, von der Orchestrierung gelieferten Worker, Workspace und expected Head. `idempotency_key` ist `pull_request_remediation:<source_review_key>:<finding_id>`.
 
+### 14.1 Exactly-once-Materialisierung je Remediation-Quelle
+
+Nach Nachweis aller zehn Bedingungen materialisiert genau eine neue DB-Operation TODO und Task. Sie darf den bestehenden vor-transaktionalen `create_task()`-Fast-Path weder aufrufen noch als Idempotenzbeweis verwenden:
+
+1. Kanonischer Source-Key ist das Tupel `(source_review_key, finding_id)`; daraus werden deterministisch `todo_id`, Idempotency-Key und `materialization_hash` der vollstaendigen immutable Spezifikation berechnet.
+2. Eine einzige `BEGIN IMMEDIATE`-Board-Transaktion umfasst Claim/Insert, Task-Insert, Readback, `created_task_id` und Events. `INSERT ... ON CONFLICT DO NOTHING` fuer den durch `UNIQUE(source_review_key, finding_id)` geschuetzten TODO wird mit einem neuen unvorhersagbaren Attempt-Token als `claim_owner`, einer begrenzten `claim_expires` und Status `MATERIALIZING` ausgefuehrt, danach wird genau diese Zeile gelesen. Eine bestehende unvollstaendige Zeile darf nur nach abgelaufener Lease per CAS auf einen neuen Attempt-Token uebernommen werden; waehrend einer lebenden Lease liefert sie `OVERLAP_SKIPPED` ohne Write.
+3. Bei bestehender Zeile muessen Source Head, Branch, Worker, Workspace, gesamter Spezifikationshash und Idempotency-Key exakt passen. Abweichung ist `REMEDIATION_CONFLICT`, nicht Update, Delete oder zweite Task.
+4. Ist `created_task_id` gesetzt, muss genau dieser eine Task unabhaengig von seinem Lifecycle mit passendem Idempotency-Key, Body-Source-Key, Assignee, Projekt, Workspace und Hash existieren. Exakt dieser Task wird idempotent zurueckgegeben; null, mehr als einer oder ein Feldmismatch ist `INTERNAL_INVARIANT` und exponiert keine weitere Task.
+5. Ist `created_task_id` NULL und gehoert die Zeile dem aktuellen Attempt-Token, fuehrt die Operation genau einen direkten Task-Insert ueber eine neue connection-scoped Primitive ohne eigene Lookup-/Commit-Grenze aus und liest den Task in derselben Transaktion anhand seiner neuen ID und des unique Remediation-Idempotency-Key zurueck. Erst nach vollstaendig erfolgreichem Readback werden `created_task_id` und TODO-Status `TASK_CREATED` per CAS auf denselben Attempt-Token gesetzt, die Claim-Felder geloescht und beide Events geschrieben.
+6. Ein Insert-Konflikt auf Source-Key oder Remediation-Idempotency-Key wird innerhalb derselben Transaktion durch erneutes Lesen reconciled. Nur eine exakt passende, bereits gebundene Zeile darf Erfolg liefern; sonst Rollback/fail-closed. Es gibt keinen zweiten Insert, kein Suffix und kein Delete-and-recreate.
+7. Crash vor Commit hinterlaesst weder TODO noch Task. Crash beziehungsweise verlorene Antwort nach Commit wird beim Restart ueber Source-Key gelesen und liefert dieselbe `created_task_id`. Die partielle Unique-Grenze und `BEGIN IMMEDIATE` beweisen auch bei zwei Connections/Prozessen, dass fuer diesen Source-Key insgesamt nie mehr als eine Task erzeugt oder sichtbar wird.
+
+Erst eine spaetere, getrennte CAS darf `TASK_CREATED -> CLAIMED` ausfuehren, nachdem Branch-Head und alle zehn Bedingungen frisch bestaetigt wurden. Materialisierung selbst startet keinen Worker.
+
 Branchschreibablauf:
 
 1. Die Orchestrierung liefert Worker und bestehenden projektgebundenen Worktree. Der Poller setzt sie nicht.
@@ -493,12 +547,14 @@ Geschlossene Fehlerfamilien:
 - `REQUEST_COMMENT_CONFLICT`: Null/mehrere/falsche stabile Marker-ID. Permanent bis Operatorauflösung.
 - `STALE_SNAPSHOT`: A/B, Review- oder Gate-Revalidation weicht ab. Alter Key `STALE`; kein Gate-Upgrade.
 - `BINDING_MISSING|AMBIGUOUS|INVALID`: kein Fallback, kein Task.
+- `BINDING_CHANGED|ADMISSION_FAILED`: keine Promotion; Cycle `STALE` oder weiterhin `PENDING_READ_C`, Task bleibt `admission_pending`.
 - `DB_BUSY`: bounded Retry; unbekannter Commit-Ausgang wird per Review-Key/Task-ID gelesen, nicht wiederholt.
 - `LOCK_UNAVAILABLE`: Tick schreibt nichts; Alarm/Audit.
 - `TASK_CREATE_FAILED`: Transaktion rollt Claim und Task zurück; retrybar nur nach Fehlerklassifikation.
 - `CI_PENDING|CI_FAILED|CI_UNREADABLE`: nie PASS; pending wird später erneut gelesen, unreadable blockiert.
 - `GITHUB_WRITE_UNCERTAIN`: read/reconcile vor Retry.
 - `REMEDIATION_INELIGIBLE|CAS_LOST|UNTRUSTED_HEAD`: keine Branchmutation.
+- `REMEDIATION_CONFLICT`: Source-Key oder Spezifikation kollidiert; kein Update und keine zweite Task.
 - `INTERNAL_INVARIANT`: fail-closed, keine automatische Reparatur, strukturierter Fehler mit Korrelations-ID.
 
 Retries erhöhen `attempt_count`, schreiben einen Attempt und `next_attempt_at`. Backoff wird pro Key persistent berechnet, sodass Restarts keinen Retry-Sturm verursachen. Dauerhafte Historie wird nie überschrieben; sensible Rohdaten und Tokens werden nicht persistiert.
@@ -546,12 +602,12 @@ Alle Python-Tests laufen über `scripts/run_tests.sh`, nie direkt über `pytest`
 2. **Parser:** duplicate JSON keys, extra Marker, falsche Schema-Version, Unicode/control chars, SHA/ref/path limits, null/mehrere Kommentare, persistierte ID mismatch.
 3. **Binding:** exakte Auflösung, archiviertes/fehlendes Projekt, fehlendes/mismatched Board, unbekanntes Profil, mehrere Claims; Beweis, dass current/default/last board und globale Orchestratorwerte nicht konsultiert werden.
 4. **DB-Migration:** bestehende Boards/Projekte migrieren additiv und idempotent; alte Daten unverändert.
-5. **Race:** zwei Prozesse/Connections für denselben Key; genau ein Cycle und Task. Crash-Injection vor/nach Task-Insert, Commit, Label-Write und Result-Write.
+5. **Intake-Race und Admission:** zwei Prozesse/Connections für denselben Key; genau ein Cycle und Task. Ein kontrollierter Pause-Hook nach Intake-Commit und vor/waehrend Read C laesst parallel `recompute_ready`, manuelle Promote/Unblock-Versuche, Claim-, Review-Claim-, Stale-Reclaim- und Dispatcher-Ticks laufen; kein Pfad veraendert `admission_pending`, erzeugt Claim/Run/PID oder startet einen Worker. Read-C-Mutation bleibt `STALE`/nicht dispatchbar; nur erfolgreicher Binding-/Task-CAS setzt atomar `ready`.
 6. **Scheduler:** exakt 300 Sekunden, non-overlap, Lockfehler fail-closed, Stop/Restart, mehrere Gateways, kein LLM-/Worker-Aufruf.
 7. **State-Machines:** jede erlaubte und verbotene Transition; `STALE` nie Gate; `done` nie PASS; alte PASS nach Drift ungültig.
-8. **Revalidation/TOCTOU:** Base-Tip-, Head-, Label-, Comment-, Binding- und Ruleset-Drift zwischen A/B, Review und Gate.
+8. **Revalidation/TOCTOU:** Base-Tip-, Head-, Label-, Comment-, Binding- und Ruleset-Drift zwischen A/B/C, Review und Gate. Zwei Connections aktualisieren die Binding-Revision vor und waehrend Intake/Promotion; Sperrordnung plus Fingerprint-CAS liefern Rollback oder `STALE/admission_pending`, niemals Routing unter alter Projekt-/Board-/Orchestrierungsautoritaet.
 9. **CI:** pending/missing/failure/duplicate/unknown nie PASS; alle required successful am exakten Head kann PASS ermöglichen.
-10. **Remediation-Tabelle:** genau zehn Bedingungen, jede einzeln false; keine Task/Branchmutation; alle true erlaubt nur Claim. Worker/Reviewer-Trennung.
+10. **Remediation-Tabelle:** genau zehn Bedingungen, jede einzeln false; keine Task/Branchmutation; alle true erlaubt nur die transaktionale Materialisierung. Zwei Connections/Prozesse fuer denselben Source-Key, Spezifikationskonflikt sowie Crash vor Insert, nach Insert, vor Commit und Antwortverlust nach Commit beweisen exakt eine sichtbare Task und dieselbe `created_task_id`. Worker/Reviewer-Trennung.
 11. **Branch-CAS:** parallele Worker, Lease-Verlust, protected/default branch, untrusted fork, non-fast-forward, restart; keine unerlaubte Mutation.
 12. **Dry-Run:** Snapshot der DB-/GitHub-Fake-Zähler vor/nach; bitgleich null Writes und vollständiger deterministischer Report.
 13. **E2E:** temp `HERMES_HOME`, reale `projects.db`/Board-DB, Fake-GitHub-Port, CLI→Poller→Task→revalidation→Result sowie Worker-Commit→neuer Key→neuer Request. Keine Mocks für DB-/Config-Auflösung.
@@ -562,7 +618,7 @@ Alle Python-Tests laufen über `scripts/run_tests.sh`, nie direkt über `pytest`
 
 Vor Aktivierung MUSS ein Operator:
 
-1. Contract- und unabhängiges Security-Gate auf denselben Commit/Hash als PASS nachweisen.
+1. Den Provenance-Gate aus Abschnitt 21 ausfuehren und das unabhaengige Contract-/Security-Review durch `agency-security-reviewer` als PASS nachweisen, gebunden an exakt denselben finalen Commit, Remote-Ref, Pfad, Blob-SHA-256 und frischen `origin/main`-Basis-SHA.
 2. GitHub-Write-Rechte, Label-Existenz, Ruleset-/Checks-Lesbarkeit und den tatsächlichen Fork/Remote verifizieren.
 3. Binding über die explizite CLI in `projects.db` anlegen, read-back validieren und Board-Metadaten vergleichen.
 4. `validate-bindings` und einen vollständigen `--dry-run --json` mit `writes_performed: 0` archivieren.
@@ -599,3 +655,17 @@ Vor Implementierung erneut zu verifizieren:
 - Filelocks auf Netzwerkdateisystemen sind nicht universell zuverlässig. Korrektheit beruht deshalb zusätzlich auf SQLite-Transaktionen und Unique Constraints.
 
 Änderungen an Key-Feldern, Normalisierung, Markerformat, Gate-Semantik, den zehn Remediation-Bedingungen oder Routingautorität erfordern eine neue Schema-/Vertragsversion und erneutes unabhängiges Architektur-/Security-Review. Additive Logfelder und unbekannte optionale JSON-Felder dürfen kompatibel ergänzt werden, sofern sie keine Autorität tragen.
+
+## 21. Verbindlicher Provenance- und Release-Gate
+
+Unmittelbar vor jeder Implementierungsaufnahme oder -fortsetzung MUSS ein fail-closed, maschinenpruefbarer Gate-Lauf:
+
+1. `git fetch origin main <finaler-nicht-default-ref>` ausfuehren und den danach aufgeloesten vollen `refs/remotes/origin/main`-SHA als Live-Basis protokollieren; ein zuvor gespeicherter SHA genuegt nicht.
+2. Den im unabhaengigen PASS genannten finalen vollen Commit, Remote-Ref `refs/heads/...`, Pfad `docs/kanban/github-pr-review-dispatcher-contract.md`, finalen Blob-SHA-256 und Basis-SHA exakt aus dem Release-Manifest lesen. Abgekuerzte SHAs, lokale-only Refs oder implizite Branches sind verboten.
+3. Per Remote-Readback beweisen, dass der genannte Nicht-Default-Ref auf `origin` exakt den genannten Commit aufloest, und dass der Commit vom genannten Basis-SHA abstammt. Wenn `origin/main` seit dem PASS fortgeschritten ist, muss die Basis auf der neuen Spitze sauber neu hergestellt, der Kandidat neu gebunden und unabhaengig erneut reviewed werden; ein alter PASS darf nicht uebertragen werden.
+4. Den Blob am genannten Commit/Pfad lesen und dessen SHA-256 exakt vergleichen; ausserdem beweisen, dass der gesamte Diff von Basis bis Kandidat als einzige Datei genau diesen Contract-Pfad enthaelt, und dass der Blob die erwartete Contract-Version nennt. Der Singleton-Changed-File-Scope ist eine aus Basis/Commit abgeleitete Invariante, kein sechstes Release-Manifest-Feld.
+5. Mit `git merge-base --is-ancestor` beweisen, dass der verbotene Commit `aad0cbd55e9fef41cad79f7ca6f75b0e14a74ff6` kein Vorfahr des finalen Kandidaten ist. Merge, Cherry-pick oder sonstiger Import seiner Ancestry ist verboten. Die verworfene v1.0.0-Bindung bleibt ausschliesslich historische Evidenz und kann nie Release-Autoritaet sein.
+6. Ein explizites, unabhaengiges `PASS` von `agency-security-reviewer` lesen, das genau dieselben fuenf finalen Werte nennt und keine offenen P0/P1/P2-Contract-Findings enthaelt. Taskstatus `done`, ein PASS zu einem anderen Blob oder Schweigen sind kein PASS.
+7. Bei jeder fehlenden Remote-Berechtigung, jedem Fetch-/Readback-/Hash-/Ancestry-/Scope-/Reviewer-Mismatch und jedem nicht aufloesbaren Ref mit `DO_NOT_IMPLEMENT` abbrechen. Es gibt keinen lokalen, gecachten, manuellen oder Default-Branch-Fallback.
+
+Der Gate-Report enthaelt die fuenf finalen Bindungswerte, Fetch-Zeit, Remote-Readback, Ancestry-Ergebnisse, Reviewer-Verdikt und `implementation_release_authorized: true|false`, aber keine Credentials. Nur ein vollstaendig positives Ergebnis darf die separate Implementierungs-Task manuell freigeben; dieser Architektur-Task startet sie niemals selbst.
