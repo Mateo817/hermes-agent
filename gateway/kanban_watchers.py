@@ -10,6 +10,8 @@ in ``kanban_watchers_common``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
 import os
 import time
 from pathlib import Path
@@ -324,6 +326,46 @@ class GatewayKanbanWatchersMixin:
             await self._sleep_between_ticks(interval)
 
         self._release_kanban_dispatcher_lock()
+
+    async def _github_pr_review_watcher(self) -> None:
+        """Run the disabled-by-default model-free PR review poller every 300s."""
+        try:
+            from hermes_cli.config import load_config
+            cfg = load_config()
+            settings = cfg.get("kanban", {}).get("github_pr_review", {}) if isinstance(cfg, dict) else {}
+            if not settings.get("enabled", False):
+                return
+            if settings.get("interval_seconds") != 300 or settings.get("label") != "hermes-review-requested" or settings.get("request_marker") != "<!-- hermes-review-request -->":
+                logger.error("github PR review watcher disabled: invalid Schema-1 configuration")
+                return
+        except Exception:
+            logger.exception("github PR review watcher disabled: configuration unavailable")
+            return
+        from hermes_constants import get_hermes_home
+        lock_path = get_hermes_home() / "kanban" / ".github-pr-review-dispatcher.lock"
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = lock_path.open("a+")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            logger.info("github PR review watcher skipped: OVERLAP_SKIPPED")
+            return
+        try:
+            await asyncio.sleep(5)
+            while self._running:
+                try:
+                    from hermes_cli.pr_review_dispatcher import poll_once
+                    report = await _to_thread_process_service(poll_once)
+                    logger.info("github PR review poll complete: candidates=%d writes=%d", len(report.candidates), report.writes_performed)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("github PR review poll failed")
+                await self._sleep_between_ticks(300)
+        finally:
+            with contextlib.suppress(Exception):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

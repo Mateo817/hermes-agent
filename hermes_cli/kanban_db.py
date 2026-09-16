@@ -100,7 +100,9 @@ def _git_out(cwd: Path, *args: str, timeout: int = 30) -> Optional[str]:
 
 # --- Constants ---
 
-VALID_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived"}
+# ``admission_pending`` is reserved for transactional PR-review intake.  It is
+# intentionally not considered by the ordinary dispatcher or lifecycle helpers.
+VALID_STATUSES = {"triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done", "archived", "admission_pending"}
 VALID_INITIAL_STATUSES = {"running", "blocked"}
 
 # Typed block reasons (routing in ``_route_block``); ``None`` = legacy un-typed.
@@ -1067,6 +1069,46 @@ CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, start
 CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+
+-- Schema-1 deterministic GitHub PR review state.  These tables are additive;
+-- ordinary Kanban lifecycle code intentionally does not select admission_pending.
+CREATE TABLE IF NOT EXISTS pr_review_subjects (
+    repository TEXT NOT NULL, pr_number INTEGER NOT NULL,
+    review_request_comment_id INTEGER NOT NULL, request_comment_actor TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (repository, pr_number), UNIQUE (repository, review_request_comment_id)
+);
+CREATE TABLE IF NOT EXISTS pr_review_cycles (
+    review_key TEXT PRIMARY KEY, schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    repository TEXT NOT NULL, pr_number INTEGER NOT NULL, base_ref TEXT NOT NULL, base_sha TEXT NOT NULL,
+    head_repository TEXT NOT NULL, head_ref TEXT NOT NULL, head_sha TEXT NOT NULL,
+    project_id TEXT NOT NULL, board_slug TEXT NOT NULL, orchestration_profile TEXT NOT NULL,
+    binding_revision INTEGER NOT NULL, binding_fingerprint TEXT NOT NULL,
+    request_comment_id INTEGER NOT NULL, request_body_sha256 TEXT NOT NULL,
+    task_type TEXT NOT NULL CHECK (task_type = 'pull_request_review'), task_id TEXT UNIQUE,
+    admission_status TEXT NOT NULL, lifecycle TEXT NOT NULL, gate TEXT NOT NULL, required_ci TEXT NOT NULL,
+    result_comment_id INTEGER UNIQUE, result_body_sha256 TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER, last_error_class TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    UNIQUE (repository, pr_number, base_sha, head_sha)
+);
+CREATE TABLE IF NOT EXISTS pr_review_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, review_key TEXT NOT NULL REFERENCES pr_review_cycles(review_key),
+    operation TEXT NOT NULL, status TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER,
+    error_class TEXT, retryable INTEGER NOT NULL, github_request_id TEXT, detail_json TEXT
+);
+CREATE TABLE IF NOT EXISTS pr_review_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, review_key TEXT, repository TEXT NOT NULL, pr_number INTEGER NOT NULL,
+    kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pr_review_todos (
+    todo_id TEXT PRIMARY KEY, finding_id TEXT NOT NULL, source_review_key TEXT NOT NULL REFERENCES pr_review_cycles(review_key),
+    source_head_sha TEXT NOT NULL, goal TEXT NOT NULL, scope_json TEXT NOT NULL, components_json TEXT NOT NULL,
+    acceptance_json TEXT NOT NULL, tests_json TEXT NOT NULL, branch TEXT NOT NULL, worker_profile TEXT NOT NULL,
+    workspace_path TEXT NOT NULL, expected_head_sha TEXT NOT NULL, materialization_hash TEXT NOT NULL,
+    claim_owner TEXT, claim_expires INTEGER, status TEXT NOT NULL, resulting_head_sha TEXT,
+    created_task_id TEXT UNIQUE, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    UNIQUE (source_review_key, finding_id)
+);
 """
 
 

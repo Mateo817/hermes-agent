@@ -1759,6 +1759,20 @@ DEFAULT_CONFIG = {
         # Profile for the root/orchestration task after Triage decomposition; "" = default profile.
         # Does not control the decomposer LLM path (see auxiliary.kanban_decomposer).
         "orchestrator_profile": "",
+        # Deterministic, model-free GitHub PR review intake. Disabled by default;
+        # activation requires explicit repository bindings and a validated Schema-1 config.
+        "github_pr_review": {
+            "enabled": False,
+            "interval_seconds": 300,
+            "label": "hermes-review-requested",
+            "request_marker": "<!-- hermes-review-request -->",
+            "result_marker": "<!-- hermes-review-result -->",
+            "lock_timeout_seconds": 0,
+            "github_timeout_seconds": 30,
+            "retry_base_seconds": 30,
+            "retry_max_seconds": 1800,
+            "max_candidates_per_tick": 50,
+        },
         # Assignee when the orchestrator can't match one to an installed profile; "" = default
         # profile. A task never ends up with assignee=None.
         "default_assignee": "",

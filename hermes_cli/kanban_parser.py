@@ -431,6 +431,13 @@ _SPECS = [
              "class is reported and left untouched (fail-closed). Exits 0 when the DB is healthy "
              "or was repaired, non-zero when it is still corrupt."
          )),
+    _cmd("pr-review", [], children=("pr_review_action", [
+        _cmd("poll", [
+            _arg("--dry-run", action="store_true", help="Read and report without any writes"),
+            _arg("--repository", help="Filter to an already configured repository binding"),
+            _json_flag(),
+        ], help="Poll explicitly requested GitHub PR reviews"),
+    ]), help="Deterministic GitHub PR review dispatcher (disabled by default)"),
 ]
 
 

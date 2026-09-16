@@ -64,6 +64,22 @@ CREATE TABLE IF NOT EXISTS discovered_repos (
     label         TEXT,
     last_seen     INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS project_repository_bindings (
+    repository TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    orchestration_profile TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+    binding_revision INTEGER NOT NULL DEFAULT 1 CHECK (binding_revision > 0),
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    CHECK (repository = lower(repository))
+);
+CREATE TABLE IF NOT EXISTS project_repository_binding_versions (
+    repository TEXT PRIMARY KEY,
+    last_revision INTEGER NOT NULL CHECK (last_revision > 0),
+    updated_at INTEGER NOT NULL,
+    CHECK (repository = lower(repository))
+);
 """
 
 # Lowercase alphanumerics, hyphens, underscores; 1-64 chars; no leading separator. Strict enough to
@@ -143,6 +159,43 @@ def connect_closing(db_path: Optional[Path] = None):
     finally:
         with contextlib.suppress(Exception):
             conn.close()
+
+
+def upsert_repository_binding(conn: sqlite3.Connection, repository: str, project_id: str,
+                              orchestration_profile: str, *, enabled: bool = False) -> dict:
+    """Create or update one explicit repository routing binding.
+
+    Revision allocation is monotonic even after delete/recreate and is done in
+    the caller's transaction so readers never observe a half-updated binding.
+    """
+    repository = str(repository).strip().lower()
+    if not re.fullmatch(r"^[a-z0-9](?:[a-z0-9_.-]{0,38})/[a-z0-9](?:[a-z0-9_.-]{0,99})$", repository):
+        raise ValueError("invalid repository")
+    if not project_id or not orchestration_profile.strip():
+        raise ValueError("project and orchestration profile are required")
+    project = conn.execute("SELECT id, archived, board_slug, primary_path FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project is None or project["archived"] or not project["board_slug"] or not project["primary_path"]:
+        raise ValueError("project is missing, archived, or incomplete")
+    now = int(time.time())
+    old = conn.execute("SELECT * FROM project_repository_bindings WHERE repository = ?", (repository,)).fetchone()
+    ledger = conn.execute("SELECT last_revision FROM project_repository_binding_versions WHERE repository = ?", (repository,)).fetchone()
+    revision = max(int(old["binding_revision"]) if old else 0, int(ledger[0]) if ledger else 0) + 1
+    if old:
+        conn.execute("UPDATE project_repository_bindings SET project_id=?, orchestration_profile=?, enabled=?, binding_revision=?, updated_at=? WHERE repository=?",
+                     (project_id, orchestration_profile.strip(), int(enabled), revision, now, repository))
+    else:
+        conn.execute("INSERT INTO project_repository_bindings VALUES (?,?,?,?,?,?,?)",
+                     (repository, project_id, orchestration_profile.strip(), int(enabled), revision, now, now))
+    conn.execute("INSERT INTO project_repository_binding_versions VALUES (?,?,?) ON CONFLICT(repository) DO UPDATE SET last_revision=excluded.last_revision, updated_at=excluded.updated_at",
+                 (repository, revision, now))
+    return {"repository": repository, "project_id": project_id, "orchestration_profile": orchestration_profile.strip(), "enabled": bool(enabled), "binding_revision": revision}
+
+
+def get_repository_binding(conn: sqlite3.Connection, repository: str, *, enabled_only: bool = False) -> Optional[dict]:
+    repository = str(repository).strip().lower()
+    query = "SELECT * FROM project_repository_bindings WHERE repository = ?" + (" AND enabled=1" if enabled_only else "")
+    row = conn.execute(query, (repository,)).fetchone()
+    return dict(row) if row else None
 
 
 @dataclass

@@ -1252,6 +1252,21 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
                              ("task_id", "ok", "reason", "fanout", "child_ids", "new_title"), _decompose_ok_line)
 
 
+def _cmd_pr_review(args: argparse.Namespace) -> int:
+    """Run the model-free PR review poller; no implicit board is consulted."""
+    if getattr(args, "pr_review_action", None) != "poll":
+        return _err("kanban pr-review: choose an action (currently: poll)", 2)
+    from hermes_cli.pr_review_dispatcher import poll_once
+    report = poll_once(dry_run=bool(getattr(args, "dry_run", False)),
+                       repository=getattr(args, "repository", None))
+    payload = report.as_dict()
+    if getattr(args, "json", False):
+        _print_json(payload, ascii=True)
+    else:
+        print(f"PR review poll: {len(report.processed)} candidate(s); writes={report.writes_performed}")
+    return 0
+
+
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
     "list": _cmd_list, "ls": _cmd_list, "show": _cmd_show,
@@ -1271,7 +1286,7 @@ _HANDLERS = {
     "assignees": _cmd_assignees, "notify-subscribe": _cmd_notify_subscribe,
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
-    "gc": _cmd_gc,
+    "gc": _cmd_gc, "pr-review": _cmd_pr_review,
 }
 
 
