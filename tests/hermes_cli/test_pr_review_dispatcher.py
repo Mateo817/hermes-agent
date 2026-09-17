@@ -18,6 +18,7 @@ from hermes_cli.pr_review_dispatcher import (
 )
 from hermes_cli.pr_review_dispatcher import (IssueComment, PullRequestRef, PullRequestSnapshot,
                                               REVIEW_REQUEST_MARKER, poll_once)
+from hermes_cli.pr_review_dispatcher import GitHubCLI
 
 
 @pytest.fixture
@@ -66,6 +67,23 @@ def test_ci_requires_producer_bound_completed_check_success():
     assert validate_required_ci(snapshot) == "PASS"
     assert validate_required_ci({**snapshot, "checks": [{**passing, "status": "queued"}]}) == "PENDING"
     assert validate_required_ci({"readable": False, "required": required, "checks": []}) == "BLOCKED"
+
+
+def test_checks_endpoints_parse_envelopes_and_reject_inconsistent_pages(monkeypatch):
+    github = GitHubCLI()
+    monkeypatch.setattr(github, "_api", lambda *args: [{"total_count": 1, "check_suites": [{"id": 9}]}])
+    assert github.read_check_suites("o/r", "a" * 40) == [{"id": 9}]
+    monkeypatch.setattr(github, "_api", lambda *args: [{"total_count": 0, "check_runs": []}])
+    assert github.read_check_runs("o/r", 9) == []
+    monkeypatch.setattr(github, "_api", lambda *args: [{"total_count": 1, "check_runs": []}])
+    with pytest.raises(RuntimeError, match="inconsistent"):
+        github.read_check_runs("o/r", 9)
+
+
+def test_native_dispatch_adapter_defers_to_scheduler():
+    from hermes_cli.pr_review_dispatcher import HermesProjectBindingAdapter
+    result = HermesProjectBindingAdapter().dispatch_native_task("t_12345678", {})
+    assert result == {"deferred_to_native_scheduler": True, "task_id": "t_12345678"}
 
 
 def test_remediation_has_exactly_twelve_cumulative_conditions():

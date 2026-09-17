@@ -719,6 +719,24 @@ class GitHubCLI:
             raise RuntimeError("GitHub returned invalid pagination row")
         return rows
 
+    def _check_pages(self, endpoint: str, field: str, *fields: str) -> list[dict[str, Any]]:
+        """Read Checks pagination envelopes without treating them as arrays."""
+        pages = self._api(endpoint, *fields, "--paginate", "--slurp")
+        if not isinstance(pages, list) or any(not isinstance(page, Mapping) for page in pages):
+            raise RuntimeError("GitHub returned invalid checks pagination")
+        rows: list[dict[str, Any]] = []
+        for page in pages:
+            count, items = page.get("total_count"), page.get(field)
+            if type(count) is not int or count < 0 or not isinstance(items, list):
+                raise RuntimeError("GitHub returned incomplete checks pagination")
+            if count != len(items) or any(not isinstance(item, dict) for item in items):
+                raise RuntimeError("GitHub returned inconsistent checks pagination")
+            rows.extend(items)
+        identities = [item.get("id") for item in rows]
+        if any(identity is None for identity in identities) or len(identities) != len(set(identities)):
+            raise RuntimeError("GitHub returned duplicate or unidentified checks rows")
+        return rows
+
     def list_candidates(self, repository: str | None, label: str) -> list[PullRequestRef]:
         if repository is not None:
             repository = canonical_repository(repository)
@@ -802,7 +820,7 @@ class GitHubCLI:
         repository = canonical_repository(repository)
         if not FULL_SHA_RE.fullmatch(head_sha):
             raise ValueError("invalid head sha")
-        return self._pages(f"repos/{repository}/commits/{head_sha}/check-suites", "-f", "per_page=100")
+        return self._check_pages(f"repos/{repository}/commits/{head_sha}/check-suites", "check_suites", "-f", "per_page=100")
 
     def read_check_suite(self, repository: str, suite_id: int) -> dict[str, Any]:
         return self._api(f"repos/{canonical_repository(repository)}/check-suites/{int(suite_id)}")
@@ -810,8 +828,7 @@ class GitHubCLI:
     def read_check_runs(self, repository: str, suite_id: int, *, filter: str = "all") -> list[dict[str, Any]]:
         if filter != "all":
             raise ValueError("v1.1.3 requires filter=all")
-        rows = self._pages(f"repos/{canonical_repository(repository)}/check-suites/{int(suite_id)}/check-runs", "-f", "per_page=100", "-f", "filter=all")
-        return rows
+        return self._check_pages(f"repos/{canonical_repository(repository)}/check-suites/{int(suite_id)}/check-runs", "check_runs", "-f", "per_page=100", "-f", "filter=all")
 
 
 def canonical_repository(value: str) -> str:
@@ -1028,8 +1045,9 @@ def _invoke(obj: Any, names: Sequence[str], *args: Any, **kwargs: Any) -> Any:
 
 
 def _dispatcher_state_db() -> Path:
-    root = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
-    return root / "kanban" / "github-pr-review-dispatcher.db"
+    from hermes_constants import get_hermes_home
+
+    return get_hermes_home() / "kanban" / "github-pr-review-dispatcher.db"
 
 
 def _init_dispatcher_state(path: Path) -> sqlite3.Connection:
@@ -1052,7 +1070,6 @@ def _binding_for(bindings: Any, repository: str) -> Mapping[str, Any]:
     required = ("project_id", "board", "orchestration_profile", "binding_revision")
     if any(not value.get(k) for k in required):
         raise DispatcherBindingError("repository binding is incomplete")
-    # This workflow is intentionally exact: no current-board/name/default lookup.
     if value["project_id"] != "p_41500605" or value["board"] != "hermes-system":
         raise DispatcherBindingError("repository binding is not the configured project/board")
     return value
@@ -1065,7 +1082,7 @@ class HermesProjectBindingAdapter:
         from hermes_cli import projects_db
         with projects_db.connect_closing() as conn:
             binding = projects_db.get_repository_binding(conn, canonical_repository(repository), enabled_only=True)
-            if not binding or binding["project_id"] != "p_41500605":
+            if not binding:
                 raise DispatcherBindingError("enabled repository binding is absent")
             project = conn.execute("SELECT board_slug FROM projects WHERE id=?", (binding["project_id"],)).fetchone()
             if not project or project["board_slug"] != "hermes-system":
@@ -1076,29 +1093,42 @@ class HermesProjectBindingAdapter:
         from hermes_cli import kanban_db as kb
         from hermes_cli import kanban_db_connect as kbc
         body = json.dumps({"schema_version": 1, "review_key": review_key, "identity": dict(identity)}, sort_keys=True)
-        with kbc.connect_closing(board="hermes-system") as conn:
+        with kbc.connect_closing(board=str(binding["board"])) as conn:
             task_id = kb.create_task(conn, title=f"Review PR #{identity['pr_number']}", body=body,
                 assignee=str(binding["orchestration_profile"]), created_by="github-pr-review",
                 idempotency_key=review_key, triage=True, initial_status="triage",
-                board="hermes-system", project_id="p_41500605")
+                board=str(binding["board"]), project_id=str(binding["project_id"]))
             return {"id": task_id, "review_key": review_key}
 
     def read_native_task(self, task_id: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
         from hermes_cli import kanban_db as kb
         from hermes_cli import kanban_db_connect as kbc
-        with kbc.connect_closing(board="hermes-system") as conn:
+        with kbc.connect_closing(board=str(binding["board"])) as conn:
             task = kb.get_task(conn, task_id)
             if task is None:
                 raise RuntimeError("native task readback missing")
             return {"id": task.id, "review_key": task.idempotency_key, "status": task.status,
                     "assignee": task.assignee, "project_id": task.project_id}
 
-    def dispatch_native_task(self, task_id: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
-        from hermes_cli import kanban_db_dispatch as kbd
+    def read_native_task_by_review_key(self, review_key: str, binding: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """Recover a task after an uncertain create-before-audit write."""
         from hermes_cli import kanban_db_connect as kbc
-        with kbc.connect_closing(board="hermes-system") as conn:
-            result = kbd.dispatch_once(conn, dry_run=False)
-            return {"spawned": getattr(result, "spawned", [])}
+        with kbc.connect_closing(board=str(binding["board"])) as conn:
+            row = conn.execute(
+                "SELECT id FROM tasks WHERE idempotency_key=? AND status != 'archived' "
+                "ORDER BY created_at DESC LIMIT 1", (review_key,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self.read_native_task(row["id"], binding)
+
+    def dispatch_native_task(self, task_id: str, binding: Mapping[str, Any]) -> Mapping[str, Any]:
+        # Native Hermes scheduling owns claiming, decomposition, retries, and
+        # spawning. Calling dispatch_once here would select unrelated board work
+        # and create a competing scheduler.
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("native task id is required")
+        return {"deferred_to_native_scheduler": True, "task_id": task_id}
 
 
 def assemble_dispatcher_adapters() -> tuple[GitHubCLI, HermesProjectBindingAdapter]:
@@ -1179,12 +1209,16 @@ def _process_review(ref: PullRequestRef, github: Any, bindings: Any, conn: sqlit
         if not isinstance(sid, int):
             raise RuntimeError("invalid check suite identity")
         observed = _invoke(github, ("read_check_suite",), identity["repository"], sid)
+        if (not isinstance(observed, Mapping)
+                or observed.get("id") != sid
+                or observed.get("head_sha") != identity["head_sha"]):
+            raise RuntimeError("check suite identity or head mismatch")
         runs = _invoke(github, ("read_check_runs",), identity["repository"], sid, filter="all")
         for run in runs:
             if isinstance(run, Mapping):
                 checks.append({"name": run.get("name"), "app_id": (run.get("app") or {}).get("id", run.get("app_id")),
                                "status": run.get("status"), "conclusion": run.get("conclusion"),
-                               "head_sha": run.get("head_sha"), "suite_id": observed.get("id", sid)})
+                               "head_sha": run.get("head_sha"), "suite_id": observed["id"]})
     ci = validate_required_ci({"readable": True, "head_sha": identity["head_sha"],
                                "required": policy.get("required", []), "checks": checks})
     if ci != "PASS":
@@ -1203,17 +1237,36 @@ def _process_review(ref: PullRequestRef, github: Any, bindings: Any, conn: sqlit
     if dry_run:
         return {"repository": identity["repository"], "pr_number": identity["pr_number"], "review_key": key,
                 "status": "READY", "ci": ci, "dry_run": True}
+    assert conn is not None
     if existing is not None and existing["task_id"]:
         recovered = _invoke(bindings, ("read_native_task", "read_task"), existing["task_id"], binding)
         if isinstance(recovered, Mapping) and recovered.get("id") == existing["task_id"]:
             return {"repository": identity["repository"], "pr_number": identity["pr_number"],
                     "review_key": key, "status": "DISPATCHED", "task_id": existing["task_id"],
                     "recovered": True, "ci": ci}
+    if existing is not None and existing["task_id"] is None:
+        recover = getattr(bindings, "read_native_task_by_review_key", None)
+        if not callable(recover):
+            recover = getattr(bindings, "read_task_by_idempotency_key", None)
+        if callable(recover):
+            recovered = recover(key, binding)
+            if isinstance(recovered, Mapping) and recovered.get("id") and recovered.get("review_key") == key:
+                task_id = recovered["id"]
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    _persist_cycle(conn, identity, key, binding, lifecycle="TASK_CREATED",
+                                   admission="MATERIALIZED", task_id=task_id)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return {"repository": identity["repository"], "pr_number": identity["pr_number"],
+                        "review_key": key, "status": "DISPATCHED", "task_id": task_id,
+                        "recovered": True, "ci": ci}
     # Read C and native task creation/readback are delegated to configured Hermes ports.
     current = _invoke(github, ("read_pull_request",), ref.repository, ref.number)
     if current != first:
         raise RuntimeError("PR identity drift at Read C")
-    assert conn is not None
     if not _claim_materialization(conn, key):
         raise RuntimeError("cycle is already claimed by another poller")
     task = _invoke(bindings, ("create_native_task", "create_task"), identity, key, binding)
