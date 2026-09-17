@@ -881,6 +881,9 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_tenant ON tasks(tenant)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)")
+    # Review/remediation exactly-once boundary.  Deliberately created after
+    # additive column migration so legacy boards remain openable.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_review_task_key ON tasks(idempotency_key) WHERE idempotency_key LIKE 'pull_request_review:%' OR idempotency_key LIKE 'pull_request_remediation:%'")
 
     # task_events.run_id back-fills as NULL for historical events (they predate
     # runs and can't be attributed).
