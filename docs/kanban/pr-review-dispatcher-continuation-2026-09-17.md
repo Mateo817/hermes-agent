@@ -4,7 +4,9 @@ State: NORMAL_DEVELOPMENT / BLOCKED for positive gate. No merge, activation, def
 
 Candidate and publication
 - Commit before this report: `df689070244f008a6bc18588b9196ae67d34070e`
-- Report commit: recorded by Git after this file is added; the report commit is the published PR head.
+- Report commit: `e079fefe3965e2d0bb4d3f97e753f6e57d85d81f`
+- Report tree: `e77e3f5789a6a24759a48b34d16883fe616e34f3`
+- Report commit parent: `df689070244f008a6bc18588b9196ae67d34070e`
 - Publication repository/ref: `Mateo817/hermes-agent` / `hermes-agent-workflow/t_763d130d-implementiere-und-publiziere-den-determi`
 - Parent lineage: `df689070244...` descends from `3e06dd...`, `3d1dc1939967...`, and approved contract ancestor `fe02031480e...`; forbidden `aad0cbd55e...` is not an ancestor.
 - Publication used a fast-forward push after reading old remote OID `3e06d69522797e4ee387b7587f8a2b5997d47a64`.
